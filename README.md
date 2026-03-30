@@ -18,9 +18,6 @@ npm run dev
 
 Variables de entorno:
 
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
-- `VITE_ANALYSIS_API_URL` opcional. Si no se define, el frontend usa solo el procesador local y no intenta conectarse a FastAPI.
 
 ### PWA
 
