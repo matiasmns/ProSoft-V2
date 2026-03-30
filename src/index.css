@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Open Sans', sans-serif;
+  --font-sans: 'Open Sans', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --font-display: 'Oswald', sans-serif;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body,
+button,
+input,
+textarea,
+select {
+  font-family: var(--font-sans);
+}
+
+code,
+pre,
+kbd,
+samp,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+@keyframes installPromptBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes installPromptPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.install-prompt-backdrop {
+  animation: installPromptBackdropIn 180ms ease-out;
+}
+
+.install-prompt-panel {
+  animation: installPromptPanelIn 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .install-prompt-backdrop,
+  .install-prompt-panel {
+    animation: none;
+  }
+}
