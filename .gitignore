@@ -1,4 +1,4 @@
-# Logs
+﻿# Logs
 logs
 *.log
 npm-debug.log*
@@ -28,3 +28,5 @@ __pycache__/
 backend/.venv/
 .uv-cache/
 .tmp/
+dev-dist/
+

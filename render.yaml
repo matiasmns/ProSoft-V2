@@ -1,0 +1,16 @@
+﻿services:
+  - type: web
+    name: prosoft-analysis-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: PROSOFT_CALIBRATION_FILE
+        value: /app/app/default_calibration.json
+      - key: ALLOWED_ORIGINS
+        sync: false

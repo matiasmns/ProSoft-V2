@@ -1,4 +1,4 @@
-# ProSoft V2
+﻿# ProSoft V2
 
 Aplicacion para carga de pacientes, muestras y analisis de electroforesis.
 
@@ -18,6 +18,11 @@ npm run dev
 
 Variables de entorno:
 
+```env
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+VITE_ANALYSIS_API_URL=https://your-analysis-api.onrender.com
+```
 
 ### PWA
 
@@ -29,6 +34,16 @@ Variables de entorno:
 ## Backend
 
 Ver `backend/README.md`.
+
+## Despliegue Fase 1
+
+La opcion recomendada para entregar esta version es:
+
+- frontend en `Vercel`
+- backend `FastAPI` en `Render` con `Docker`
+- `Supabase` como servicio de datos y storage
+
+Guia operativa: `src/docs/deploy-fase-1.md`
 
 ## Flujo principal
 
@@ -43,5 +58,3 @@ Ver `backend/README.md`.
 - Si el backend `FastAPI` no responde, el frontend usa el procesador local de respaldo.
 - El algoritmo local es solo un prototipo; el camino objetivo es el backend Python con `OpenCV + NumPy + SciPy`.
 - La calibracion base del backend vive en `backend/app/default_calibration.json` y hoy esta ajustada con casos sinteticos; falta contrastarla con estudios reales del equipo.
-
-

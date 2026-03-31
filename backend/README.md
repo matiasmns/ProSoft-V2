@@ -1,4 +1,4 @@
-# Backend de Analisis
+﻿# Backend de Analisis
 
 Servicio `FastAPI` para procesar imagenes de electroforesis con `OpenCV + NumPy + SciPy`.
 
@@ -20,7 +20,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 `GET /api/v1/calibration`
 
-Devuelve el perfil de calibracion activo, con ventanas de fracciones y umbrales del algoritmo. Si queres usar un archivo distinto al default, seteá `PROSOFT_CALIBRATION_FILE`.
+Devuelve el perfil de calibracion activo, con ventanas de fracciones y umbrales del algoritmo. Si queres usar un archivo distinto al default, setea `PROSOFT_CALIBRATION_FILE`.
 
 Campos `multipart/form-data`:
 
@@ -52,4 +52,21 @@ docker build -t prosoft-analysis-api .
 docker run --rm -p 8000:8000 prosoft-analysis-api
 ```
 
+El contenedor usa `PORT` si el hosting lo define y cae a `8000` como valor por defecto.
 
+## Variables de entorno
+
+```env
+ALLOWED_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,https://your-frontend.vercel.app
+PROSOFT_CALIBRATION_FILE=/app/app/default_calibration.json
+PORT=8000
+```
+
+## Deploy recomendado
+
+Para la fase 1 del entregable:
+
+- frontend en `Vercel`
+- backend en `Render` con `runtime: docker`
+
+El repo ya incluye `render.yaml` para crear el servicio del backend.
