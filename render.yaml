@@ -2,7 +2,7 @@
   - type: web
     name: prosoft-analysis-api
     runtime: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /health
