@@ -38,10 +38,10 @@ export type ResultadoCrudo = {
 }
 
 export const emptyCropSettings: CropSettings = {
-  izquierda: '',
-  arriba: '',
-  ancho: '',
-  alto: '',
+  izquierda: '0',
+  arriba: '0',
+  ancho: '35',
+  alto: '100',
   separacion: '',
 }
 

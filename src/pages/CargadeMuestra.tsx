@@ -38,6 +38,8 @@ type ImageDimensions = {
   height: number
 }
 
+const FIXED_IMAGE_TYPE = 'densitograma'
+
 const thumbButtonStyle = {
   border: '1px solid #DFE0E5',
   background: '#FFFFFF',
@@ -200,7 +202,7 @@ export default function CargadeMuestra() {
     const added: ImageFile[] = Array.from(files).map(file => ({
       file,
       preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
-      tipo: file.name.toLowerCase().includes('densit') ? 'densitograma' : 'otro',
+      tipo: FIXED_IMAGE_TYPE,
       crop: { ...emptyCropSettings },
       dimensions: null,
     }))
@@ -694,22 +696,12 @@ export default function CargadeMuestra() {
                         <div className="mb-3">
                           <label className="flex flex-col gap-1">
                             <span className="text-[11px]" style={{ color: '#54585E' }}>Tipo de imagen</span>
-                            <select
-                              value={selectedImage.tipo}
-                              onChange={event => setImages(prev =>
-                                prev.map((currentImage, currentIndex) => (
-                                  currentIndex === selectedImageIndex
-                                    ? { ...currentImage, tipo: event.target.value }
-                                    : currentImage
-                                )),
-                              )}
-                              className="w-full text-xs rounded-lg px-3 py-2 outline-none cursor-pointer"
-                              style={{ border: '1px solid #DFE0E5', color: '#54585E', background: '#fff' }}
-                            >
-                              <option value="densitograma">Densitograma</option>
-                              <option value="reporte">Reporte</option>
-                              <option value="otro">Otro</option>
-                            </select>
+                            <input
+                              value="Densitograma"
+                              readOnly
+                              className="w-full text-xs rounded-lg px-3 py-2 outline-none"
+                              style={{ border: '1px solid #DFE0E5', color: '#54585E', background: '#F4F5F7' }}
+                            />
                           </label>
                         </div>
 
