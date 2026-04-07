@@ -1568,12 +1568,12 @@ export default function NuevoAnalisisPage() {
                         className="w-full rounded-lg px-3 py-2 text-xs font-medium transition"
                         style={{ background: '#FBFBFC', color: '#54585E', border: '1px solid #DFE0E5' }}
                       >
-                        Rehabilitar intento al backend
+                        Marcar backend como sin verificar
                       </button>
                     )}
                     <p className="text-xs" style={{ color: '#54585E' }}>
                       {ANALYSIS_API_ENABLED
-                        ? '`Automatico` intenta FastAPI una vez. Si falla, esta sesion deja de reintentarlo hasta que lo rehabilites. `Solo local` evita el intento al backend.'
+                        ? '`Automatico` intenta FastAPI en cada procesamiento. Si falla, usa respaldo local y muestra el detalle del error. `Solo local` evita el intento al backend.'
                         : 'El backend solo se habilita si definis `VITE_ANALYSIS_API_URL` en el frontend. Mientras no exista esa variable, el procesamiento queda en modo local.'}
                     </p>
                   </div>

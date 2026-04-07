@@ -57,7 +57,7 @@ export async function processElectrophoresisWithBackend(input: {
       body: formData,
     })
   } catch {
-    throw new Error(`No se pudo conectar con el backend en ${ANALYSIS_API_URL}.`)
+    throw new Error(`No se pudo conectar con el backend en ${ANALYSIS_API_URL}. Si /health responde, revisar CORS en Render: ALLOWED_ORIGINS debe incluir el dominio exacto de Vercel.`)
   }
 
   if (!response.ok) {
