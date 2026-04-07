@@ -78,14 +78,17 @@ const fracciones: Array<{ key: FraccionKey; label: string }> = [
   { key: 'beta_2', label: 'Beta 2' },
   { key: 'gamma', label: 'Gamma' },
 ]
+const globulinFractionKeys: FraccionKey[] = ['alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
+const alphaFractionKeys: FraccionKey[] = ['alfa_1', 'alfa_2']
+const betaFractionKeys: FraccionKey[] = ['beta_1', 'beta_2']
 // Rangos iniciales de referencia para SPEP en adultos. Confirmar y ajustar segun el metodo validado del laboratorio.
 const FRACTION_REFERENCES: Record<FraccionKey, FractionReference> = {
-  albumina: { percent: '55.8 - 66.1', concentration: '3.2 - 5.4' },
-  alfa_1: { percent: '2.9 - 4.9', concentration: '0.2 - 0.4' },
-  alfa_2: { percent: '7.1 - 11.8', concentration: '0.4 - 1.0' },
-  beta_1: { percent: '4.7 - 7.2', concentration: '0.3 - 0.6' },
-  beta_2: { percent: '3.2 - 6.5', concentration: '0.2 - 0.5' },
-  gamma: { percent: '11.1 - 18.8', concentration: '0.6 - 1.5' },
+  albumina: { percent: '55.8 - 66.1', concentration: '40.20 - 47.60' },
+  alfa_1: { percent: '2.9 - 4.9', concentration: '2.10 - 3.50' },
+  alfa_2: { percent: '7.1 - 11.8', concentration: '5.10 - 8.50' },
+  beta_1: { percent: '4.7 - 7.2', concentration: '3.40 - 5.20' },
+  beta_2: { percent: '3.2 - 6.5', concentration: '2.30 - 4.70' },
+  gamma: { percent: '11.1 - 18.8', concentration: '8.00 - 13.50' },
 }
 
 const inputClass = 'w-full rounded-lg px-3 py-2 text-sm outline-none transition'
@@ -152,6 +155,57 @@ function calculateConcentration(percentual: string, total: string) {
   return ((percentValue * totalValue) / 100).toFixed(2)
 }
 
+function parseResultNumber(value: string) {
+  const parsed = Number(value)
+  return value.trim() && Number.isFinite(parsed) ? parsed : null
+}
+
+function parseTotalConcentration(value: string) {
+  const parsed = Number(value)
+  return value.trim() && Number.isFinite(parsed) ? parsed : null
+}
+
+function sumFractionValues(vals: FraccionVals, keys: FraccionKey[], field: 'pct' | 'conc') {
+  const values = keys.map(key => parseResultNumber(vals[key][field]))
+  const hasAnyValue = values.some(value => value != null)
+  if (!hasAnyValue) return null
+
+  return values.reduce<number>((total, value) => total + (value ?? 0), 0)
+}
+
+function formatDerivedValue(value: number | null, suffix = '') {
+  if (value == null || !Number.isFinite(value)) return ''
+  return `${value.toFixed(2)}${suffix}`
+}
+
+function buildDerivedAnalysisValues(vals: FraccionVals) {
+  const albuminPct = parseResultNumber(vals.albumina.pct)
+  const globulinPct = sumFractionValues(vals, globulinFractionKeys, 'pct')
+  const alphaPct = sumFractionValues(vals, alphaFractionKeys, 'pct')
+  const betaPct = sumFractionValues(vals, betaFractionKeys, 'pct')
+
+  const albuminConc = parseResultNumber(vals.albumina.conc)
+  const globulinConc = sumFractionValues(vals, globulinFractionKeys, 'conc')
+  const alphaConc = sumFractionValues(vals, alphaFractionKeys, 'conc')
+  const betaConc = sumFractionValues(vals, betaFractionKeys, 'conc')
+
+  const agRatio = albuminPct != null && globulinPct != null && globulinPct > 0
+    ? albuminPct / globulinPct
+    : albuminConc != null && globulinConc != null && globulinConc > 0
+      ? albuminConc / globulinConc
+      : null
+
+  return {
+    agRatio: formatDerivedValue(agRatio),
+    globulinsPct: formatDerivedValue(globulinPct, '%'),
+    globulinsConc: formatDerivedValue(globulinConc, ' g/dL'),
+    alphaPct: formatDerivedValue(alphaPct, '%'),
+    alphaConc: formatDerivedValue(alphaConc, ' g/dL'),
+    betaPct: formatDerivedValue(betaPct, '%'),
+    betaConc: formatDerivedValue(betaConc, ' g/dL'),
+  }
+}
+
 function formatDisplayValue(value: string | null | undefined, fallback = '---') {
   return value && value.trim() ? value : fallback
 }
@@ -216,6 +270,45 @@ function buildValsFromReview(review: ManualReviewData): FraccionVals {
   }
 
   return next
+}
+
+function buildValsFromProcessorResult(result: LocalProcessorResult, totalConcentration: number | null): FraccionVals {
+  const next = createEmptyVals()
+
+  for (const fraccion of fracciones) {
+    const fraction = result.fractions[fraccion.key]
+    const percentage = fraction.percentage
+    next[fraccion.key] = {
+      pct: percentage.toFixed(2),
+      conc: totalConcentration != null ? ((percentage * totalConcentration) / 100).toFixed(2) : '',
+    }
+  }
+
+  return next
+}
+
+function sameSeparatorRatios(left: number[], right: number[], tolerance = 0.0005) {
+  if (left.length !== right.length) return false
+  return left.every((ratio, index) => Math.abs(ratio - right[index]) <= tolerance)
+}
+
+function shouldUseProcessorFractions(result: LocalProcessorResult, separatorRatios: number[]) {
+  return sameSeparatorRatios(separatorRatios, buildDefaultSeparatorRatios(result))
+}
+
+function formatDiagnosticNumber(value: number | null | undefined, digits = 2) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  return value.toFixed(digits)
+}
+
+function formatProfilePosition(index: number, profileLength: number) {
+  const denominator = Math.max(profileLength - 1, 1)
+  return `${((index / denominator) * 100).toFixed(1)}%`
+}
+
+function formatIndexList(indices: number[], profileLength: number) {
+  if (indices.length === 0) return '---'
+  return indices.map(index => `${index} (${formatProfilePosition(index, profileLength)})`).join(', ')
 }
 
 function buildStoredManualReview(review: ManualReviewData, selectedSeparatorIndex: number) {
@@ -375,6 +468,33 @@ function normalizeIncomingImages(images: IncomingImageState[] | undefined): Imag
   })
 }
 
+const DENSITOGRAM_X_VISUAL_SCALE = 0.74
+
+function compactDensitogramX(x: number, index: number, lastIndex: number) {
+  if (index === 0) return 0
+  if (index === lastIndex) return 1
+  return 0.5 + (x - 0.5) * DENSITOGRAM_X_VISUAL_SCALE
+}
+
+function restoreDensitogramX(displayX: number) {
+  return Math.min(Math.max(0.5 + (displayX - 0.5) / DENSITOGRAM_X_VISUAL_SCALE, 0), 1)
+}
+
+function buildDensitogramDisplayY(y: number, index: number, lastIndex: number) {
+  if (index === 0) return 0
+  if (index === lastIndex) return 0
+  return Math.min(Math.max(y, 0), 1)
+}
+
+function buildDensitogramDisplayProfile(profile: LocalProcessorResult['profile']) {
+  const lastIndex = Math.max(profile.length - 1, 0)
+  return profile.map((point, index) => ({
+    ...point,
+    x: compactDensitogramX(point.x, index, lastIndex),
+    y: buildDensitogramDisplayY(point.y, index, lastIndex),
+  }))
+}
+
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-2xl p-5" style={{ background: 'linear-gradient(160deg, #FBFBFC, #FAF9FB)', border: '1px solid #DFE0E5', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
@@ -427,14 +547,16 @@ function ProfileChart({
     ? `Procesado con ${processorSourceLabel(meta.source)}${meta.calibrationProfile ? ` (${meta.calibrationProfile}${meta.calibrationVersion ? ` ${meta.calibrationVersion}` : ''})` : ''}. Requiere revision profesional.`
     : 'Procesamiento local preliminar. Requiere revision profesional.'
 
-  const points = result.profile.map(point => `${(plotLeft + point.x * plotWidth).toFixed(1)},${(plotBottom - point.y * plotHeight).toFixed(1)}`).join(' ')
+  const displayProfile = buildDensitogramDisplayProfile(result.profile)
+  const points = displayProfile.map(point => `${(plotLeft + point.x * plotWidth).toFixed(1)},${(plotBottom - point.y * plotHeight).toFixed(1)}`).join(' ')
 
   function toSvgRatio(event: React.PointerEvent<SVGSVGElement | SVGLineElement | SVGCircleElement>) {
     const rect = svgRef.current?.getBoundingClientRect()
     if (!rect) return null
 
     const x = ((event.clientX - rect.left) / rect.width) * chartWidth
-    return Math.min(Math.max((x - plotLeft) / plotWidth, 0), 1)
+    const displayRatio = Math.min(Math.max((x - plotLeft) / plotWidth, 0), 1)
+    return restoreDensitogramX(displayRatio)
   }
 
   function startDragging(index: number, event: React.PointerEvent<SVGLineElement | SVGCircleElement>) {
@@ -517,9 +639,9 @@ function ProfileChart({
         {fracciones.map((fraccion, index) => {
           const fraction = review.fractions[fraccion.key]
           const segmentColor = REVIEW_SEPARATOR_DEFS[index]?.color ?? '#94BB66'
-          const startPoint = result.profile[fraction.start]
-          const endPoint = result.profile[fraction.end]
-          const segmentPoints = result.profile.slice(fraction.start, fraction.end + 1)
+          const startPoint = displayProfile[fraction.start]
+          const endPoint = displayProfile[fraction.end]
+          const segmentPoints = displayProfile.slice(fraction.start, fraction.end + 1)
 
           if (!startPoint || !endPoint || segmentPoints.length === 0) return null
 
@@ -560,17 +682,19 @@ function ProfileChart({
         <polyline fill="none" stroke="#161616" strokeWidth="1" strokeLinejoin="round" strokeLinecap="round" points={points} />
 
         {review.separators.map((separator, index) => {
-          const x = plotLeft + separator.x * plotWidth
-          const y = plotBottom - separator.y * plotHeight
+          const displayX = displayProfile[separator.index]?.x ?? compactDensitogramX(separator.x, separator.index, result.profile.length - 1)
+          const x = plotLeft + displayX * plotWidth
           const isSelected = index === selectedSeparatorIndex
           const isLocked = index === 0 || index === review.separators.length - 1
+          const displayY = isLocked ? 0 : separator.y
+          const y = plotBottom - displayY * plotHeight
 
           return (
             <g key={separator.id}>
               <line
                 x1={x}
                 x2={x}
-                y1={plotTop}
+                y1={isLocked ? y : plotTop}
                 y2={plotBottom}
                 stroke={separator.color}
                 strokeWidth={isSelected ? 1 : 1.5}
@@ -580,7 +704,7 @@ function ProfileChart({
               <line
                 x1={x}
                 x2={x}
-                y1={plotTop}
+                y1={isLocked ? y : plotTop}
                 y2={plotBottom}
                 stroke="transparent"
                 strokeWidth="1"
@@ -761,7 +885,8 @@ function PrintableProfileChart({
   const plotBottom = plotTop + plotHeight
   const xAxisLabelY = plotBottom + 18
   const yAxisLabelX = plotLeft - 12
-  const points = result.profile.map(point => `${(plotLeft + point.x * plotWidth).toFixed(1)},${(plotBottom - point.y * plotHeight).toFixed(1)}`).join(' ')
+  const displayProfile = buildDensitogramDisplayProfile(result.profile)
+  const points = displayProfile.map(point => `${(plotLeft + point.x * plotWidth).toFixed(1)},${(plotBottom - point.y * plotHeight).toFixed(1)}`).join(' ')
   const subtitle = meta.source === 'backend_fastapi'
     ? `Procesado con ${processorSourceLabel(meta.source)}${meta.calibrationProfile ? ` (${meta.calibrationProfile}${meta.calibrationVersion ? ` ${meta.calibrationVersion}` : ''})` : ''}`
     : 'Procesamiento local preliminar'
@@ -820,9 +945,9 @@ function PrintableProfileChart({
         {fracciones.map((fraccion, index) => {
           const fraction = review.fractions[fraccion.key]
           const segmentColor = REVIEW_SEPARATOR_DEFS[index]?.color ?? '#94BB66'
-          const startPoint = result.profile[fraction.start]
-          const endPoint = result.profile[fraction.end]
-          const segmentPoints = result.profile.slice(fraction.start, fraction.end + 1)
+          const startPoint = displayProfile[fraction.start]
+          const endPoint = displayProfile[fraction.end]
+          const segmentPoints = displayProfile.slice(fraction.start, fraction.end + 1)
 
           if (!startPoint || !endPoint || segmentPoints.length === 0) return null
 
@@ -861,15 +986,18 @@ function PrintableProfileChart({
         <polyline fill="none" stroke="#292929" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" points={points} />
 
         {review.separators.map((separator, index) => {
-          const x = plotLeft + separator.x * plotWidth
-          const y = plotBottom - separator.y * plotHeight
+          const displayX = displayProfile[separator.index]?.x ?? compactDensitogramX(separator.x, separator.index, result.profile.length - 1)
+          const x = plotLeft + displayX * plotWidth
+          const isLocked = index === 0 || index === review.separators.length - 1
+          const displayY = isLocked ? 0 : separator.y
+          const y = plotBottom - displayY * plotHeight
 
           return (
             <g key={`print-separator-${separator.id}`}>
               <line
                 x1={x}
                 x2={x}
-                y1={plotTop}
+                y1={isLocked ? y : plotTop}
                 y2={plotBottom}
                 stroke={separator.color}
                 strokeWidth={index === 0 || index === review.separators.length - 1 ? 3.5 : 2.5}
@@ -918,6 +1046,10 @@ export default function NuevoAnalisisPage() {
   const [success, setSuccess] = useState('')
   const printTimestamp = formatPrintTimestamp(new Date())
   const printableImages = images.filter(image => image.preview).slice(0, 2)
+  const derivedAnalysisValues = buildDerivedAnalysisValues(vals)
+  const usingProcessorFractions = processorResult && separatorRatios
+    ? shouldUseProcessorFractions(processorResult, separatorRatios)
+    : false
 
   function handleFraccion(key: FraccionKey, value: string) {
     setVals(current => ({ ...current, [key]: { pct: value, conc: calculateConcentration(value, concTotal) } }))
@@ -1010,13 +1142,15 @@ export default function NuevoAnalisisPage() {
       return
     }
 
-    const totalConcentration = concTotal ? parseFloat(concTotal) : null
+    const totalConcentration = parseTotalConcentration(concTotal)
     const nextReview = buildManualReviewData(
       processorResult,
       separatorRatios,
-      Number.isFinite(totalConcentration) ? totalConcentration : null,
+      totalConcentration,
     )
-    const nextVals = buildValsFromReview(nextReview)
+    const nextVals = shouldUseProcessorFractions(processorResult, separatorRatios)
+      ? buildValsFromProcessorResult(processorResult, totalConcentration)
+      : buildValsFromReview(nextReview)
 
     setManualReview(nextReview)
     setVals(current => sameVals(current, nextVals) ? current : nextVals)
@@ -1112,8 +1246,7 @@ export default function NuevoAnalisisPage() {
       const { data: { user } } = await supabase.auth.getUser()
       const storedImages = readStoredInputImages(rawResult)
       const crop = findCropForImage(sourceImage, storedImages)
-      const totalConcentration = concTotal ? parseFloat(concTotal) : null
-      const safeTotalConcentration = Number.isFinite(totalConcentration) ? totalConcentration : null
+      const safeTotalConcentration = parseTotalConcentration(concTotal)
       const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto' && backendStatus !== 'unavailable'
 
       let result: LocalProcessorResult
@@ -1162,7 +1295,7 @@ export default function NuevoAnalisisPage() {
       const initialSeparatorRatios = buildDefaultSeparatorRatios(result)
       const nextSelectedSeparatorIndex = 1
       const nextReview = buildManualReviewData(result, initialSeparatorRatios, safeTotalConcentration)
-      const computedVals = buildValsFromReview(nextReview)
+      const computedVals = buildValsFromProcessorResult(result, safeTotalConcentration)
 
       const nextCantidadPicos = result.detected_peaks.toString()
       const nextRawResult = mergeRawResultWithManualReview({
@@ -1351,12 +1484,26 @@ export default function NuevoAnalisisPage() {
                       ))}
                     </tbody>
                   </table>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {[
+                      ['A/G Ratio', derivedAnalysisValues.agRatio, 'Albumina / globulinas'],
+                      ['Globulinas', derivedAnalysisValues.globulinsPct, derivedAnalysisValues.globulinsConc],
+                      ['Alfa total', derivedAnalysisValues.alphaPct, derivedAnalysisValues.alphaConc],
+                      ['Beta total', derivedAnalysisValues.betaPct, derivedAnalysisValues.betaConc],
+                    ].map(([label, value, detail]) => (
+                      <div key={label} className="rounded-xl px-3 py-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
+                        <p className="text-[11px] font-semibold" style={{ color: '#5C894A' }}>{label}</p>
+                        <p className="text-base font-semibold mt-1" style={{ color: '#54585E' }}>{formatDisplayValue(value)}</p>
+                        <p className="text-[10px] mt-1" style={{ color: '#6B7178' }}>{formatDisplayValue(detail)}</p>
+                      </div>
+                    ))}
+                  </div>
                   <p className="mt-3 text-[11px]" style={{ color: '#6B7178' }}>
                     Rangos de referencia iniciales para adultos. Ajustar segun el metodo y validacion clinica del laboratorio.
                   </p>
                 </Card>
 
-                                <Card title="Motor de procesamiento">
+                <Card title="Motor de procesamiento">
                   <div className="flex flex-col gap-3">
                     <div className="flex gap-2">
                       <button
@@ -1421,6 +1568,86 @@ export default function NuevoAnalisisPage() {
                     </p>
                   </div>
                 </Card>
+
+                {processorResult && (
+                  <Card title="Diagnostico tecnico">
+                    <div className="flex flex-col gap-3 text-xs" style={{ color: '#54585E' }}>
+                      <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-semibold" style={{ color: '#5C894A' }}>Fuente de valores</span>
+                          <span className="rounded-full px-2 py-1 font-semibold" style={usingProcessorFractions
+                            ? { background: '#F0FDF4', color: '#15803D' }
+                            : { background: '#FFF7ED', color: '#C76A16' }}>
+                            {usingProcessorFractions ? 'Procesador' : 'Revision manual'}
+                          </span>
+                        </div>
+                        <p className="mt-2" style={{ color: '#6B7178' }}>
+                          Si esta en `Procesador`, la tabla usa las fracciones calculadas por el motor. Si esta en `Revision manual`, la tabla usa las areas delimitadas por los separadores movidos.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded-xl p-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
+                          <p className="text-[10px] font-semibold" style={{ color: '#6B7178' }}>Motor</p>
+                          <p className="mt-1 font-semibold">{processorSourceLabel(processorMeta.source)}</p>
+                        </div>
+                        <div className="rounded-xl p-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
+                          <p className="text-[10px] font-semibold" style={{ color: '#6B7178' }}>Eje</p>
+                          <p className="mt-1 font-semibold">{processorResult.axis.toUpperCase()}</p>
+                        </div>
+                        <div className="rounded-xl p-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
+                          <p className="text-[10px] font-semibold" style={{ color: '#6B7178' }}>Perfil</p>
+                          <p className="mt-1 font-semibold">{processorResult.profile_length} puntos</p>
+                        </div>
+                        <div className="rounded-xl p-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
+                          <p className="text-[10px] font-semibold" style={{ color: '#6B7178' }}>Area total</p>
+                          <p className="mt-1 font-semibold">{formatDiagnosticNumber(processorResult.total_area, 4)}</p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
+                        <p className="font-semibold" style={{ color: '#5C894A' }}>Crop usado</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>
+                          x {processorResult.crop_used.left}, y {processorResult.crop_used.top}, ancho {processorResult.crop_used.width}, alto {processorResult.crop_used.height}
+                        </p>
+                      </div>
+
+                      <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
+                        <p className="font-semibold" style={{ color: '#5C894A' }}>Picos y minimos detectados</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Picos: {formatIndexList(processorResult.peaks, processorResult.profile_length)}</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Minimos: {formatIndexList(processorResult.valleys, processorResult.profile_length)}</p>
+                      </div>
+
+                      <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #DFE0E5' }}>
+                        <table className="w-full text-[11px]">
+                          <thead style={{ background: '#F4F5F7' }}>
+                            <tr>
+                              <th className="text-left px-2 py-2" style={{ color: '#5C894A' }}>Fraccion</th>
+                              <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Motor %</th>
+                              <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Tabla %</th>
+                              <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Rango</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fracciones.map(fraccion => {
+                              const fraction = processorResult.fractions[fraccion.key]
+                              return (
+                                <tr key={`diagnostic-${fraccion.key}`} style={{ borderTop: '1px solid #EDF0F2' }}>
+                                  <td className="px-2 py-1.5 font-semibold" style={{ color: '#54585E' }}>{fraccion.label}</td>
+                                  <td className="px-2 py-1.5 text-right">{formatDiagnosticNumber(fraction.percentage)}</td>
+                                  <td className="px-2 py-1.5 text-right">{formatDisplayValue(vals[fraccion.key].pct)}</td>
+                                  <td className="px-2 py-1.5 text-right" style={{ color: '#6B7178' }}>
+                                    {formatProfilePosition(fraction.start, processorResult.profile_length)} - {formatProfilePosition(fraction.end, processorResult.profile_length)}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </Card>
+                )}
 
                 <div className="flex flex-col gap-2">
                   <button type="button" onClick={handleProcess} disabled={processing || loadingExisting || images.length === 0} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer disabled:opacity-60" style={{ background: 'linear-gradient(180deg, #94BB66, #4A9151)', border: '1px solid #56874A', color: '#F1FAEF', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }}>
@@ -1515,7 +1742,7 @@ export default function NuevoAnalisisPage() {
             </div>
 
             <div className="rounded-2xl p-5 mt-5" style={{ background: 'linear-gradient(160deg, #FBFBFC, #FAF9FB)', border: '1px solid #DFE0E5' }}>
-              <p className="text-sm font-semibold mb-4" style={{ color: '#5C894A' }}>Fracciones proteicassss</p>
+              <p className="text-sm font-semibold mb-4" style={{ color: '#5C894A' }}>Fracciones proteicas</p>
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ borderBottom: '1px solid #DFE0E5' }}>
@@ -1538,6 +1765,20 @@ export default function NuevoAnalisisPage() {
                   ))}
                 </tbody>
               </table>
+              <div className="mt-3 grid grid-cols-4 gap-2">
+                {[
+                  ['A/G Ratio', derivedAnalysisValues.agRatio, 'Albumina / globulinas'],
+                  ['Globulinas', derivedAnalysisValues.globulinsPct, derivedAnalysisValues.globulinsConc],
+                  ['Alfa total', derivedAnalysisValues.alphaPct, derivedAnalysisValues.alphaConc],
+                  ['Beta total', derivedAnalysisValues.betaPct, derivedAnalysisValues.betaConc],
+                ].map(([label, value, detail]) => (
+                  <div key={`print-derived-${label}`} className="rounded-xl px-3 py-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
+                    <p className="text-[11px] font-semibold" style={{ color: '#5C894A' }}>{label}</p>
+                    <p className="text-sm font-semibold mt-1" style={{ color: '#54585E' }}>{formatDisplayValue(value)}</p>
+                    <p className="text-[10px] mt-1" style={{ color: '#6B7178' }}>{formatDisplayValue(detail)}</p>
+                  </div>
+                ))}
+              </div>
               <p className="text-[11px] mt-3" style={{ color: '#6B7178' }}>
                 Rangos de referencia iniciales para adultos. Validar contra el metodo, equipo y poblacion de referencia del laboratorio.
               </p>

@@ -102,10 +102,13 @@ function trapezoidArea(values: number[], start: number, end: number) {
 }
 
 function findValley(values: number[], from: number, to: number) {
-  let valleyIndex = from
+  if (to <= from) return from
+  if (to - from <= 2) return clamp(Math.round((from + to) / 2), 0, Math.max(0, values.length - 1))
+
+  let valleyIndex = from + 1
   let valleyValue = Number.POSITIVE_INFINITY
 
-  for (let index = from; index <= to; index += 1) {
+  for (let index = from + 1; index < to; index += 1) {
     if (values[index] < valleyValue) {
       valleyValue = values[index]
       valleyIndex = index
@@ -116,7 +119,7 @@ function findValley(values: number[], from: number, to: number) {
 }
 
 function detectLocalMaxima(values: number[]) {
-  const minHeight = 0.08
+  const minHeight = 0.05
   const minDistance = Math.max(8, Math.floor(values.length / 18))
   const candidates: number[] = []
 
@@ -236,6 +239,12 @@ export async function processElectrophoresisImage(input: {
     const start = clamp(Math.floor(window.start * (normalizedProfile.length - 1)), 0, normalizedProfile.length - 1)
     const end = clamp(Math.floor(window.end * (normalizedProfile.length - 1)), start, normalizedProfile.length - 1)
 
+    // Prefer a real detected peak within this window; fall back to the highest point
+    const windowPeaks = detectedPeaks.filter(p => p >= start && p <= end)
+    if (windowPeaks.length > 0) {
+      return windowPeaks.reduce((best, p) => normalizedProfile[p] > normalizedProfile[best] ? p : best)
+    }
+
     let peakIndex = start
     let peakValue = -1
 
@@ -248,6 +257,13 @@ export async function processElectrophoresisImage(input: {
 
     return peakIndex
   })
+
+  // Ensure peaks are strictly increasing to avoid zero-area fractions on short profiles
+  for (let index = 1; index < peakIndexes.length; index += 1) {
+    if (peakIndexes[index] <= peakIndexes[index - 1]) {
+      peakIndexes[index] = Math.min(peakIndexes[index - 1] + 1, normalizedProfile.length - 1)
+    }
+  }
 
   const valleys = peakIndexes.slice(0, -1).map((peakIndex, index) => (
     findValley(normalizedProfile, peakIndex, peakIndexes[index + 1])

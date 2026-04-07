@@ -97,8 +97,11 @@ def find_valleys(signal: np.ndarray, peaks: list[int]) -> list[int]:
         if following <= current:
             valleys.append(current)
             continue
-        segment = signal[current : following + 1]
-        valley = current + int(np.argmin(segment))
+        if following - current <= 2:
+            valleys.append(int(round((current + following) / 2)))
+            continue
+        segment = signal[current + 1 : following]
+        valley = current + 1 + int(np.argmin(segment))
         valleys.append(valley)
     return valleys
 
