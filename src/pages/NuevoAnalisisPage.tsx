@@ -1635,19 +1635,26 @@ export default function NuevoAnalisisPage() {
                               <th className="text-left px-2 py-2" style={{ color: '#5C894A' }}>Fraccion</th>
                               <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Motor %</th>
                               <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Tabla %</th>
-                              <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Rango</th>
+                              <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Rango motor</th>
+                              <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Rango tabla</th>
                             </tr>
                           </thead>
                           <tbody>
                             {fracciones.map(fraccion => {
-                              const fraction = processorResult.fractions[fraccion.key]
+                              const processorFraction = processorResult.fractions[fraccion.key]
+                              const reviewFraction = manualReview?.fractions[fraccion.key]
                               return (
                                 <tr key={`diagnostic-${fraccion.key}`} style={{ borderTop: '1px solid #EDF0F2' }}>
                                   <td className="px-2 py-1.5 font-semibold" style={{ color: '#54585E' }}>{fraccion.label}</td>
-                                  <td className="px-2 py-1.5 text-right">{formatDiagnosticNumber(fraction.percentage)}</td>
+                                  <td className="px-2 py-1.5 text-right">{formatDiagnosticNumber(processorFraction.percentage)}</td>
                                   <td className="px-2 py-1.5 text-right">{formatDisplayValue(vals[fraccion.key].pct)}</td>
                                   <td className="px-2 py-1.5 text-right" style={{ color: '#6B7178' }}>
-                                    {formatProfilePosition(fraction.start, processorResult.profile_length)} - {formatProfilePosition(fraction.end, processorResult.profile_length)}
+                                    {formatProfilePosition(processorFraction.start, processorResult.profile_length)} - {formatProfilePosition(processorFraction.end, processorResult.profile_length)}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-right" style={{ color: '#6B7178' }}>
+                                    {reviewFraction
+                                      ? `${formatProfilePosition(reviewFraction.start, processorResult.profile.length)} - ${formatProfilePosition(reviewFraction.end, processorResult.profile.length)}`
+                                      : '---'}
                                   </td>
                                 </tr>
                               )

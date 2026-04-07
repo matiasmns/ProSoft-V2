@@ -1,7 +1,7 @@
 {
   "profile_name": "serum_protein_default",
-  "profile_version": "2026-03-29",
-  "description": "Perfil base para calibracion inicial sin dataset clinico. Ajustado sobre casos sinteticos para mantener estabilidad del pipeline.",
+  "profile_version": "2026-04-07",
+  "description": "Perfil base para calibracion inicial con ventana de albumina ampliada para evitar picos tempranos de artefacto en muestras horizontales.",
   "clahe_clip_limit": 2.0,
   "clahe_tile_grid_size": 8,
   "gaussian_blur_kernel_size": 5,
@@ -20,31 +20,31 @@
     {
       "key": "albumina",
       "start": 0.0,
-      "end": 0.22
+      "end": 0.35
     },
     {
       "key": "alfa_1",
-      "start": 0.22,
-      "end": 0.32
-    },
-    {
-      "key": "alfa_2",
-      "start": 0.32,
+      "start": 0.35,
       "end": 0.45
     },
     {
-      "key": "beta_1",
+      "key": "alfa_2",
       "start": 0.45,
-      "end": 0.58
+      "end": 0.56
+    },
+    {
+      "key": "beta_1",
+      "start": 0.56,
+      "end": 0.68
     },
     {
       "key": "beta_2",
-      "start": 0.58,
-      "end": 0.7
+      "start": 0.68,
+      "end": 0.78
     },
     {
       "key": "gamma",
-      "start": 0.7,
+      "start": 0.78,
       "end": 1.0
     }
   ]

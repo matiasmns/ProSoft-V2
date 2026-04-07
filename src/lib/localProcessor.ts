@@ -32,12 +32,12 @@ type FractionWindow = {
 }
 
 const FRACTION_WINDOWS: FractionWindow[] = [
-  { key: 'albumina', start: 0.0, end: 0.22 },
-  { key: 'alfa_1', start: 0.22, end: 0.32 },
-  { key: 'alfa_2', start: 0.32, end: 0.45 },
-  { key: 'beta_1', start: 0.45, end: 0.58 },
-  { key: 'beta_2', start: 0.58, end: 0.7 },
-  { key: 'gamma', start: 0.7, end: 1.0 },
+  { key: 'albumina', start: 0.0, end: 0.35 },
+  { key: 'alfa_1', start: 0.35, end: 0.45 },
+  { key: 'alfa_2', start: 0.45, end: 0.56 },
+  { key: 'beta_1', start: 0.56, end: 0.68 },
+  { key: 'beta_2', start: 0.68, end: 0.78 },
+  { key: 'gamma', start: 0.78, end: 1.0 },
 ]
 
 function clamp(value: number, min: number, max: number) {
