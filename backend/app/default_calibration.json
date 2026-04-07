@@ -1,12 +1,13 @@
 {
   "profile_name": "serum_protein_default",
-  "profile_version": "2026-04-07",
-  "description": "Perfil base para calibracion inicial con ventana de albumina ampliada para evitar picos tempranos de artefacto en muestras horizontales.",
+  "profile_version": "2026-04-07-b",
+  "description": "Perfil base para calibracion inicial con ventana de albumina ampliada, piso de senal y offsets de minimos para reducir cola de globulinas y ajustar beta/gamma.",
   "clahe_clip_limit": 2.0,
   "clahe_tile_grid_size": 8,
   "gaussian_blur_kernel_size": 5,
-  "smoothing_sigma_divisor": 120.0,
+  "smoothing_sigma_divisor": 90.0,
   "smoothing_sigma_min": 1.0,
+  "signal_floor": 0.008,
   "baseline_window_divisor": 18,
   "baseline_window_min": 9,
   "peak_prominence": 0.03,
@@ -16,6 +17,7 @@
   "crop_warning_min_width": 40,
   "crop_warning_min_height": 40,
   "profile_downsample_points": 240,
+  "valley_offsets": [0.018, 0.0, 0.018, -0.055, 0.055],
   "fraction_windows": [
     {
       "key": "albumina",

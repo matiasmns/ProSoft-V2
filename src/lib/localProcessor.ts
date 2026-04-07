@@ -39,6 +39,8 @@ const FRACTION_WINDOWS: FractionWindow[] = [
   { key: 'beta_2', start: 0.68, end: 0.78 },
   { key: 'gamma', start: 0.78, end: 1.0 },
 ]
+const SIGNAL_FLOOR = 0.008
+const VALLEY_OFFSETS = [0.018, 0, 0.018, -0.055, 0.055]
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
@@ -116,6 +118,26 @@ function findValley(values: number[], from: number, to: number) {
   }
 
   return valleyIndex
+}
+
+function applyValleyOffsets(values: number[], valleys: number[], peaks: number[]) {
+  const sampleCount = values.length
+  const maxIndex = Math.max(sampleCount - 1, 0)
+  return valleys.map((valley, index) => {
+    let offset = VALLEY_OFFSETS[index] ?? 0
+    if (index === valleys.length - 1 && offset > 0) {
+      const albuminPeak = values[peaks[0]] ?? 0
+      const gammaPeak = values[peaks[peaks.length - 1]] ?? 0
+      if (gammaPeak >= albuminPeak * 1.2) {
+        offset = 0
+      }
+    }
+    const lower = peaks[index] + 1
+    const upper = peaks[index + 1] - 1
+    if (upper < lower) return valley
+    const shifted = valley + Math.round(offset * maxIndex)
+    return clamp(shifted, lower, upper)
+  })
 }
 
 function detectLocalMaxima(values: number[]) {
@@ -227,12 +249,17 @@ export async function processElectrophoresisImage(input: {
   const minValue = Math.min(...rawProfile)
   const correctedProfile = rawProfile.map(value => Math.max(0, value - minValue))
 
-  let smoothWindow = Math.max(5, Math.floor(correctedProfile.length / 40))
+  let smoothWindow = Math.max(5, Math.floor(correctedProfile.length / 30))
   if (smoothWindow % 2 === 0) smoothWindow += 1
 
   const smoothedProfile = movingAverage(correctedProfile, smoothWindow)
   const maxValue = Math.max(...smoothedProfile, 1)
-  const normalizedProfile = smoothedProfile.map(value => value / maxValue)
+  let normalizedProfile = smoothedProfile.map(value => value / maxValue)
+  if (SIGNAL_FLOOR > 0) {
+    const flooredProfile = normalizedProfile.map(value => Math.max(0, value - SIGNAL_FLOOR))
+    const flooredMaxValue = Math.max(...flooredProfile, 0.000001)
+    normalizedProfile = flooredProfile.map(value => value / flooredMaxValue)
+  }
 
   const detectedPeaks = detectLocalMaxima(normalizedProfile)
   const peakIndexes = FRACTION_WINDOWS.map(window => {
@@ -265,9 +292,10 @@ export async function processElectrophoresisImage(input: {
     }
   }
 
-  const valleys = peakIndexes.slice(0, -1).map((peakIndex, index) => (
+  const detectedValleys = peakIndexes.slice(0, -1).map((peakIndex, index) => (
     findValley(normalizedProfile, peakIndex, peakIndexes[index + 1])
   ))
+  const valleys = applyValleyOffsets(normalizedProfile, detectedValleys, peakIndexes)
 
   const fractionBounds = FRACTION_WINDOWS.map((window, index) => ({
     key: window.key,

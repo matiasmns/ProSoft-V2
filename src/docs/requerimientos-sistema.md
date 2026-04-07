@@ -241,6 +241,29 @@ El stack propuesto es adecuado para este proyecto por estas razones:
 La única salvedad importante es el despliegue final en laboratorios Windows. Si la operación real no acepta contenedores o requiere instalación sin dependencia de Docker, eso debe definirse ahora porque impacta la arquitectura operativa.
 
 
+## Tecnologias a agregar a futuro.
+
+-Pequeños upgrades recomendados (sin romper el stack):
+-Agregar scikit-image al lado de OpenCV.
+-Evaluar GelGenie/QuPath o modelos simples de segmentación con PyTorch para mejorar la detección automática de fracciones.
+-Usar Plotly Dash o Streamlit si querés prototipos rápidos de la parte científica (aunque React da más flexibilidad para la app completa).
+
+
+-scikit-image: Más "pythonic" y orientada a ciencia que OpenCV. Mejor para filtros científicos, segmentación y medición de regiones. Se integra perfectamente con NumPy/SciPy.
+-QuPath + GelGenie (2025): Framework open-source con IA (U-Net) para detección automática de bandas/geles. Muy prometedor para automatizar la segmentación y reducir intervención manual.
+-ImageJ/Fiji (con macros o plugins Python): Clásico en biología para densitometría. Muchos laboratorios ya lo usan; podrías integrarlo o inspirarte en sus algoritmos.
+Para proteinogramas específicos: Algoritmos de baseline correction y peak fitting (con SciPy.optimize o lmfit) son clave. Hay papers y repos que usan exactamente esto para SPE (Serum Protein Electrophoresis).
+-IA/ML: Si querés más automatización (detección de fracciones, clasificación de patrones patológicos como monoclonal), integrar PyTorch o TensorFlow (con modelos preentrenados o fine-tuning). Hay proyectos como SPECTR_AI para interpretación asistida por IA.
+
+## Otras mejoras generales:
+-Agregar Celery + Redis si el procesamiento de imágenes es pesado (para tareas asíncronas).
+-Validación médica: Pensar en cumplimiento (ej. en Argentina: ANMAT, buenas prácticas de software médico). Audit logging fuerte en PostgreSQL, control de versiones de imágenes, firma electrónica de reportes.
+-Integración con hardware: Si usás escáneres específicos de electroforesis (ej. de Sebia, Helena, etc.), puede ser necesario drivers o formatos propietarios. En ese caso, el backend debe manejar importación flexible.
+-Cloud vs On-premise: Docker ayuda en ambos. Para laboratorios pequeños en Argentina, on-premise o servidor local suele ser preferido por temas de privacidad de datos de pacientes.
+
+
+
+
 # Informacion importante.
 Se creo en supabase el registro de los pacientes y sus analisis.
 

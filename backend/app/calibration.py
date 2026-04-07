@@ -35,6 +35,7 @@ class ProcessorCalibration(BaseModel):
     gaussian_blur_kernel_size: int = Field(ge=1)
     smoothing_sigma_divisor: float = Field(gt=0.0)
     smoothing_sigma_min: float = Field(gt=0.0)
+    signal_floor: float = Field(default=0.0, ge=0.0, lt=1.0)
     baseline_window_divisor: int = Field(ge=1)
     baseline_window_min: int = Field(ge=3)
     peak_prominence: float = Field(gt=0.0)
@@ -44,6 +45,7 @@ class ProcessorCalibration(BaseModel):
     crop_warning_min_width: int = Field(ge=1)
     crop_warning_min_height: int = Field(ge=1)
     profile_downsample_points: int = Field(ge=16)
+    valley_offsets: tuple[float, ...] = ()
     fraction_windows: tuple[FractionWindowConfig, ...]
 
     @model_validator(mode="after")
@@ -54,6 +56,10 @@ class ProcessorCalibration(BaseModel):
             raise ValueError("baseline_window_min debe ser impar.")
         if not self.fraction_windows:
             raise ValueError("La calibracion debe definir fraction_windows.")
+        if self.valley_offsets and len(self.valley_offsets) != len(self.fraction_windows) - 1:
+            raise ValueError("valley_offsets debe tener una entrada por limite interno de fraccion.")
+        if any(abs(offset) > 0.2 for offset in self.valley_offsets):
+            raise ValueError("Cada offset de valle debe estar entre -0.2 y 0.2 del recorrido.")
 
         keys = [window.key for window in self.fraction_windows]
         if len(set(keys)) != len(keys):
@@ -83,6 +89,7 @@ class ProcessorCalibration(BaseModel):
             gaussian_blur_kernel_size=self.gaussian_blur_kernel_size,
             smoothing_sigma_divisor=self.smoothing_sigma_divisor,
             smoothing_sigma_min=self.smoothing_sigma_min,
+            signal_floor=self.signal_floor,
             baseline_window_divisor=self.baseline_window_divisor,
             baseline_window_min=self.baseline_window_min,
             peak_prominence=self.peak_prominence,
@@ -92,6 +99,7 @@ class ProcessorCalibration(BaseModel):
             crop_warning_min_width=self.crop_warning_min_width,
             crop_warning_min_height=self.crop_warning_min_height,
             profile_downsample_points=self.profile_downsample_points,
+            valley_offsets=list(self.valley_offsets),
             fraction_windows=[
                 FractionWindowPayload(
                     key=window.key,

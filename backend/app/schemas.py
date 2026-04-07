@@ -72,6 +72,7 @@ class CalibrationResponse(BaseModel):
     gaussian_blur_kernel_size: int
     smoothing_sigma_divisor: float
     smoothing_sigma_min: float
+    signal_floor: float
     baseline_window_divisor: int
     baseline_window_min: int
     peak_prominence: float
@@ -81,4 +82,5 @@ class CalibrationResponse(BaseModel):
     crop_warning_min_width: int
     crop_warning_min_height: int
     profile_downsample_points: int
+    valley_offsets: list[float]
     fraction_windows: list[FractionWindowPayload]

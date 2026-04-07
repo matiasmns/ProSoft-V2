@@ -63,7 +63,16 @@ def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) 
     peak = float(corrected.max(initial=0.0))
     if peak <= 0:
         raise ValueError("La imagen no contiene una senal util para el procesamiento.")
-    return corrected / peak
+
+    normalized = corrected / peak
+    if calibration.signal_floor > 0:
+        normalized = np.clip(normalized - calibration.signal_floor, 0.0, None)
+        adjusted_peak = float(normalized.max(initial=0.0))
+        if adjusted_peak <= 0:
+            raise ValueError("La imagen no contiene una senal util para el procesamiento.")
+        normalized = normalized / adjusted_peak
+
+    return normalized
 
 
 def detect_peaks(signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
@@ -106,6 +115,29 @@ def find_valleys(signal: np.ndarray, peaks: list[int]) -> list[int]:
     return valleys
 
 
+def apply_valley_offsets(signal: np.ndarray, peaks: list[int], valleys: list[int], offsets: tuple[float, ...]) -> list[int]:
+    if not offsets:
+        return valleys
+
+    max_index = max(signal.size - 1, 0)
+    shifted: list[int] = []
+    for index, valley in enumerate(valleys):
+        offset = offsets[index] if index < len(offsets) else 0.0
+        if index == len(valleys) - 1 and offset > 0 and peaks:
+            albumin_peak = float(signal[peaks[0]])
+            gamma_peak = float(signal[peaks[-1]])
+            if gamma_peak >= albumin_peak * 1.2:
+                offset = 0.0
+        lower = peaks[index] + 1
+        upper = peaks[index + 1] - 1
+        if upper < lower:
+            shifted.append(valley)
+            continue
+        shifted_valley = valley + int(round(offset * max_index))
+        shifted.append(clamp(shifted_valley, lower, upper))
+    return shifted
+
+
 def trapz_area(signal: np.ndarray, start: int, end: int) -> float:
     if end <= start:
         return 0.0
@@ -145,7 +177,7 @@ def process_electrophoresis_image(
 
     detected_peaks = detect_peaks(signal, active_calibration)
     peaks = choose_window_peaks(signal, detected_peaks, active_calibration.fraction_windows)
-    valleys = find_valleys(signal, peaks)
+    valleys = apply_valley_offsets(signal, peaks, find_valleys(signal, peaks), active_calibration.valley_offsets)
     total_area = trapz_area(signal, 0, signal.size - 1)
 
     if total_area <= 0:
