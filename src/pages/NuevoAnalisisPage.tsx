@@ -410,6 +410,16 @@ function readStoredBackendStatus(rawResult: Record<string, unknown> | null): Bac
   return 'unknown'
 }
 
+function resolveRuntimeBackendStatus(currentStatus: BackendStatus, rawResult: Record<string, unknown> | null): BackendStatus {
+  if (!ANALYSIS_API_ENABLED) return 'disabled'
+
+  const storedStatus = readStoredBackendStatus(rawResult)
+  if (storedStatus === 'available') return 'available'
+
+  // Un estudio viejo procesado con fallback no debe bloquear nuevos intentos al backend.
+  return currentStatus === 'disabled' ? 'unknown' : currentStatus
+}
+
 function readProcessorSource(rawResult: Record<string, unknown> | null): ProcessorSource | null {
   if (!rawResult) return null
   const source = rawResult.processor_source
@@ -1184,7 +1194,7 @@ export default function NuevoAnalisisPage() {
       setRawResult(storedRawResult)
       setProcessorResult(storedProcessorResult)
       setProcessorMeta(readProcessorMeta(storedRawResult))
-      setBackendStatus(readStoredBackendStatus(storedRawResult))
+      setBackendStatus(current => resolveRuntimeBackendStatus(current, storedRawResult))
       setSeparatorRatios(storedSeparatorRatios)
       setSelectedSeparatorIndex(storedSelectedSeparator)
       setVals({
@@ -1247,7 +1257,7 @@ export default function NuevoAnalisisPage() {
       const storedImages = readStoredInputImages(rawResult)
       const crop = findCropForImage(sourceImage, storedImages)
       const safeTotalConcentration = parseTotalConcentration(concTotal)
-      const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto' && backendStatus !== 'unavailable'
+      const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto'
 
       let result: LocalProcessorResult
       let algorithmVersion = 'local-prototype-v1'
@@ -1528,7 +1538,7 @@ export default function NuevoAnalisisPage() {
                         Solo local
                       </button>
                     </div>
-                    <div className="hidden rounded-xl px-3 py-3 text-xs" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
+                    <div className="rounded-xl px-3 py-3 text-xs" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
                       <div className="flex items-center justify-between gap-3">
                         <span style={{ color: '#54585E' }}>Estado backend</span>
                         <span className="rounded-full px-2 py-1 font-semibold" style={backendStatus === 'available'
@@ -1561,7 +1571,7 @@ export default function NuevoAnalisisPage() {
                         Rehabilitar intento al backend
                       </button>
                     )}
-                    <p className="text-xs hidden" style={{ color: '#54585E' }}>
+                    <p className="text-xs" style={{ color: '#54585E' }}>
                       {ANALYSIS_API_ENABLED
                         ? '`Automatico` intenta FastAPI una vez. Si falla, esta sesion deja de reintentarlo hasta que lo rehabilites. `Solo local` evita el intento al backend.'
                         : 'El backend solo se habilita si definis `VITE_ANALYSIS_API_URL` en el frontend. Mientras no exista esa variable, el procesamiento queda en modo local.'}
