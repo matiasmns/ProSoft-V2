@@ -20,6 +20,8 @@ export type ManualReviewData = {
   totalArea: number
 }
 
+export type ReferenceFractionTargets = Record<LocalFractionKey, number>
+
 const FRACTION_KEYS: LocalFractionKey[] = ['albumina', 'alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
 const MIN_SEPARATOR_COUNT = FRACTION_KEYS.length + 1
 
@@ -113,6 +115,48 @@ export function buildDefaultSeparatorRatios(result: LocalProcessorResult) {
   const originalMax = Math.max(1, result.profile_length - 1)
   const internalRatios = result.valleys.map(valley => clamp(valley / originalMax, 0, 1))
   return normalizeSeparatorRatios([0, ...internalRatios, 1], sampleCount)
+}
+
+export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targets: ReferenceFractionTargets) {
+  const values = result.profile.map(point => point.y)
+  const sampleCount = values.length
+  const maxIndex = Math.max(0, sampleCount - 1)
+  if (maxIndex === 0) return normalizeSeparatorRatios([], sampleCount)
+
+  const totalTarget = FRACTION_KEYS.reduce((total, key) => (
+    total + Math.max(0, Number.isFinite(targets[key]) ? targets[key] : 0)
+  ), 0)
+  const totalArea = trapezoidArea(values, 0, maxIndex)
+
+  if (totalTarget <= 0 || totalArea <= 0) return buildDefaultSeparatorRatios(result)
+
+  const ratios = [0]
+  let accumulatedTarget = 0
+
+  for (const key of FRACTION_KEYS.slice(0, -1)) {
+    accumulatedTarget += Math.max(0, targets[key]) / totalTarget
+    const targetArea = accumulatedTarget * totalArea
+    let runningArea = 0
+    let targetIndex = maxIndex
+
+    for (let index = 0; index < maxIndex; index += 1) {
+      const segmentArea = (values[index] + values[index + 1]) / 2
+      const nextArea = runningArea + segmentArea
+
+      if (nextArea >= targetArea) {
+        const fractionWithinSegment = segmentArea > 0 ? (targetArea - runningArea) / segmentArea : 0
+        targetIndex = clamp(index + Math.round(clamp(fractionWithinSegment, 0, 1)), 0, maxIndex)
+        break
+      }
+
+      runningArea = nextArea
+    }
+
+    ratios.push(targetIndex / maxIndex)
+  }
+
+  ratios.push(1)
+  return normalizeSeparatorRatios(ratios, sampleCount)
 }
 
 export function snapSeparatorRatio(

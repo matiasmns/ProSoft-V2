@@ -13,9 +13,11 @@ import {
   REVIEW_SEPARATOR_DEFS,
   buildDefaultSeparatorRatios,
   buildManualReviewData,
+  buildReferenceSeparatorRatios,
   normalizeSeparatorRatios,
   snapSeparatorRatio,
   type ManualReviewData,
+  type ReferenceFractionTargets,
 } from '../lib/manualProfileReview'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
@@ -144,6 +146,17 @@ function createEmptyVals(): FraccionVals {
   }
 }
 
+function createEmptyReferenceTargets(): Record<FraccionKey, string> {
+  return {
+    albumina: '',
+    alfa_1: '',
+    alfa_2: '',
+    beta_1: '',
+    beta_2: '',
+    gamma: '',
+  }
+}
+
 function focusGreen(event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) { event.currentTarget.style.borderColor = '#5C894A' }
 function blurGray(event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) { event.currentTarget.style.borderColor = '#DFE0E5' }
 function toTextValue(value: number | null | undefined) { return value != null ? value.toString() : '' }
@@ -204,6 +217,26 @@ function buildDerivedAnalysisValues(vals: FraccionVals) {
     betaPct: formatDerivedValue(betaPct, '%'),
     betaConc: formatDerivedValue(betaConc, ' g/dL'),
   }
+}
+
+function parseReferenceTargets(targets: Record<FraccionKey, string>): ReferenceFractionTargets | null {
+  const parsed = fracciones.reduce<ReferenceFractionTargets>((accumulator, fraccion) => {
+    accumulator[fraccion.key] = parseResultNumber(targets[fraccion.key]) ?? 0
+    return accumulator
+  }, {
+    albumina: 0,
+    alfa_1: 0,
+    alfa_2: 0,
+    beta_1: 0,
+    beta_2: 0,
+    gamma: 0,
+  })
+
+  const hasMissingValue = fracciones.some(fraccion => !targets[fraccion.key].trim())
+  const total = fracciones.reduce((sum, fraccion) => sum + parsed[fraccion.key], 0)
+
+  if (hasMissingValue || total <= 0) return null
+  return parsed
 }
 
 function formatDisplayValue(value: string | null | undefined, fallback = '---') {
@@ -1040,6 +1073,7 @@ export default function NuevoAnalisisPage() {
   const [cantidadPicos, setCantidadPicos] = useState('')
   const [concTotal, setConcTotal] = useState('')
   const [vals, setVals] = useState<FraccionVals>(createEmptyVals())
+  const [referenceTargets, setReferenceTargets] = useState<Record<FraccionKey, string>>(createEmptyReferenceTargets)
   const [observaciones, setObservaciones] = useState('')
   const [rawResult, setRawResult] = useState<Record<string, unknown> | null>(null)
   const [processorResult, setProcessorResult] = useState<LocalProcessorResult | null>(null)
@@ -1063,6 +1097,35 @@ export default function NuevoAnalisisPage() {
 
   function handleFraccion(key: FraccionKey, value: string) {
     setVals(current => ({ ...current, [key]: { pct: value, conc: calculateConcentration(value, concTotal) } }))
+  }
+
+  function handleReferenceTarget(key: FraccionKey, value: string) {
+    setReferenceTargets(current => ({ ...current, [key]: value }))
+  }
+
+  function handleApplyReferenceCalibration() {
+    if (!processorResult) {
+      setError('Primero procesa la muestra para poder calibrar contra valores de referencia.')
+      return
+    }
+
+    const targets = parseReferenceTargets(referenceTargets)
+    if (!targets) {
+      setError('Completa los porcentajes de referencia de las 6 fracciones antes de aplicar la calibracion.')
+      return
+    }
+
+    setError('')
+    setSelectedSeparatorIndex(1)
+    setSeparatorRatios(buildReferenceSeparatorRatios(processorResult, targets))
+    setSuccess('Separadores ajustados contra los valores de referencia. Revisar la curva antes de guardar.')
+  }
+
+  function handleUseCurrentFractionsAsReference() {
+    setReferenceTargets(fracciones.reduce<Record<FraccionKey, string>>((accumulator, fraccion) => {
+      accumulator[fraccion.key] = vals[fraccion.key].pct
+      return accumulator
+    }, createEmptyReferenceTargets()))
   }
 
   function handlePrint() {
@@ -1512,6 +1575,55 @@ export default function NuevoAnalisisPage() {
                     Rangos de referencia iniciales para adultos. Ajustar segun el metodo y validacion clinica del laboratorio.
                   </p>
                 </Card>
+
+                {processorResult && (
+                  <Card title="Calibracion con PDF">
+                    <div className="flex flex-col gap-3">
+                      <p className="text-xs" style={{ color: '#54585E' }}>
+                        Ingresá los porcentajes validados del informe externo. El sistema mueve los separadores para aproximar las areas de la curva a esos valores sin modificar el perfil original.
+                      </p>
+                      <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 items-center">
+                        {fracciones.map(fraccion => (
+                          <div key={`reference-target-${fraccion.key}`} className="contents">
+                            <label className="text-xs font-semibold" style={{ color: '#54585E' }}>{fraccion.label}</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={referenceTargets[fraccion.key]}
+                              onChange={event => handleReferenceTarget(fraccion.key, event.target.value)}
+                              placeholder="% PDF"
+                              className={compactInputClass}
+                              style={inputStyle}
+                              onFocus={focusGreen}
+                              onBlur={blurGray}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={handleApplyReferenceCalibration}
+                          className="rounded-lg px-3 py-2 text-xs font-semibold transition"
+                          style={{ background: '#4A9151', color: '#F1FAEF', border: '1px solid #4A9151' }}
+                        >
+                          Ajustar con PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleUseCurrentFractionsAsReference}
+                          className="rounded-lg px-3 py-2 text-xs font-medium transition"
+                          style={{ background: '#FFFFFF', color: '#54585E', border: '1px solid #DFE0E5' }}
+                        >
+                          Usar tabla actual
+                        </button>
+                      </div>
+                      <p className="text-[11px]" style={{ color: '#6B7178' }}>
+                        Esto activa `Revision manual`. Si el ajuste mejora, guardá el analisis y usá los rangos resultantes como insumo para calibración global.
+                      </p>
+                    </div>
+                  </Card>
+                )}
 
                 <Card title="Motor de procesamiento">
                   <div className="flex flex-col gap-3">
