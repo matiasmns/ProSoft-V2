@@ -171,14 +171,24 @@ function downsampleProfile(values: number[], maxPoints = 240) {
     }))
   }
 
-  const step = (values.length - 1) / (maxPoints - 1)
+  // Use max-pooling so narrow peaks are preserved instead of skipped.
+  const binSize = values.length / maxPoints
   const sampled: Array<{ x: number; y: number }> = []
 
   for (let point = 0; point < maxPoints; point += 1) {
-    const index = Math.round(point * step)
+    const start = Math.floor(point * binSize)
+    const end = Math.min(Math.ceil((point + 1) * binSize), values.length - 1)
+    let maxVal = values[start]
+    let maxIdx = start
+    for (let i = start + 1; i <= end; i += 1) {
+      if (values[i] > maxVal) {
+        maxVal = values[i]
+        maxIdx = i
+      }
+    }
     sampled.push({
-      x: index / (values.length - 1),
-      y: values[index],
+      x: maxIdx / (values.length - 1),
+      y: maxVal,
     })
   }
 
