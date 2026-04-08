@@ -24,6 +24,7 @@ export type ReferenceFractionTargets = Record<LocalFractionKey, number>
 
 const FRACTION_KEYS: LocalFractionKey[] = ['albumina', 'alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
 const MIN_SEPARATOR_COUNT = FRACTION_KEYS.length + 1
+const REFERENCE_VALLEY_SNAP_WINDOW_RATIO = 0.04
 
 export const REVIEW_SEPARATOR_DEFS: ReviewSeparatorDefinition[] = [
   { id: 'inicio', label: 'Inicio', color: '#D64545' },
@@ -74,6 +75,44 @@ function minGapFor(sampleCount: number) {
   const maxIndex = Math.max(0, sampleCount - 1)
   const feasibleGap = Math.max(1, Math.floor(maxIndex / Math.max(1, MIN_SEPARATOR_COUNT - 1)))
   return Math.min(baseGap, feasibleGap)
+}
+
+function findNearestReferenceValley(values: number[], targetIndex: number, minAllowed: number, maxAllowed: number) {
+  const maxIndex = Math.max(0, values.length - 1)
+  const safeMin = clamp(minAllowed, 0, maxIndex)
+  const safeMax = clamp(maxAllowed, safeMin, maxIndex)
+  const safeTarget = clamp(targetIndex, safeMin, safeMax)
+  const radius = Math.max(2, Math.round(maxIndex * REFERENCE_VALLEY_SNAP_WINDOW_RATIO))
+  const start = Math.max(safeMin, safeTarget - radius)
+  const end = Math.min(safeMax, safeTarget + radius)
+
+  let bestIndex = safeTarget
+  let bestScore = Number.POSITIVE_INFINITY
+  let foundLocalMinimum = false
+
+  for (let index = start; index <= end; index += 1) {
+    const previous = values[index - 1] ?? values[index]
+    const current = values[index] ?? Number.POSITIVE_INFINITY
+    const next = values[index + 1] ?? values[index]
+    const isLocalMinimum = current <= previous && current <= next
+
+    if (!isLocalMinimum && foundLocalMinimum) continue
+
+    const distancePenalty = (Math.abs(index - safeTarget) / Math.max(radius, 1)) * 0.025
+    const score = current + distancePenalty
+
+    if (isLocalMinimum && !foundLocalMinimum) {
+      foundLocalMinimum = true
+      bestScore = Number.POSITIVE_INFINITY
+    }
+
+    if (score < bestScore) {
+      bestScore = score
+      bestIndex = index
+    }
+  }
+
+  return bestIndex
 }
 
 export function normalizeSeparatorRatios(ratios: number[], sampleCount: number) {
@@ -130,7 +169,7 @@ export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targ
 
   if (totalTarget <= 0 || totalArea <= 0) return buildDefaultSeparatorRatios(result)
 
-  const ratios = [0]
+  const indices = [0]
   let accumulatedTarget = 0
 
   for (const key of FRACTION_KEYS.slice(0, -1)) {
@@ -152,11 +191,24 @@ export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targ
       runningArea = nextArea
     }
 
-    ratios.push(targetIndex / maxIndex)
+    indices.push(targetIndex)
   }
 
-  ratios.push(1)
-  return normalizeSeparatorRatios(ratios, sampleCount)
+  indices.push(maxIndex)
+
+  const normalizedIndices = ratiosToIndices(indices.map(index => index / maxIndex), sampleCount)
+  const minGap = minGapFor(sampleCount)
+
+  for (let index = 1; index < normalizedIndices.length - 1; index += 1) {
+    normalizedIndices[index] = findNearestReferenceValley(
+      values,
+      normalizedIndices[index],
+      normalizedIndices[index - 1] + minGap,
+      normalizedIndices[index + 1] - minGap,
+    )
+  }
+
+  return normalizeSeparatorRatios(normalizedIndices.map(index => index / maxIndex), sampleCount)
 }
 
 export function snapSeparatorRatio(
