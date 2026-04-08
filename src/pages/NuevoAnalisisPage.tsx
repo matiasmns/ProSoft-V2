@@ -67,6 +67,10 @@ type ProcessorMeta = {
   calibrationVersion: string
   backendFallbackDetail: string
 }
+type ReferenceCalibrationState = {
+  source: 'pdf_external'
+  targets: ReferenceFractionTargets
+}
 type FractionReference = {
   percent: string
   concentration: string
@@ -191,6 +195,11 @@ function formatDerivedValue(value: number | null, suffix = '') {
   return `${value.toFixed(2)}${suffix}`
 }
 
+function roundTo(value: number, digits: number) {
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
+}
+
 function buildDerivedAnalysisValues(vals: FraccionVals) {
   const albuminPct = parseResultNumber(vals.albumina.pct)
   const globulinPct = sumFractionValues(vals, globulinFractionKeys, 'pct')
@@ -237,6 +246,15 @@ function parseReferenceTargets(targets: Record<FraccionKey, string>): ReferenceF
 
   if (hasMissingValue || total <= 0) return null
   return parsed
+}
+
+function formatReferenceTargets(targets: ReferenceFractionTargets) {
+  return fracciones.reduce<Record<FraccionKey, string>>((accumulator, fraccion) => {
+    accumulator[fraccion.key] = Number.isFinite(targets[fraccion.key])
+      ? targets[fraccion.key].toString()
+      : ''
+    return accumulator
+  }, createEmptyReferenceTargets())
 }
 
 function formatDisplayValue(value: string | null | undefined, fallback = '---') {
@@ -365,16 +383,90 @@ function buildStoredManualReview(review: ManualReviewData, selectedSeparatorInde
   }
 }
 
+function buildStoredReferenceCalibration(
+  referenceCalibration: ReferenceCalibrationState,
+  review: ManualReviewData,
+  result: LocalProcessorResult,
+  processorMeta: ProcessorMeta,
+  selectedSeparatorIndex: number,
+) {
+  const profileLength = Math.max(result.profile.length, result.profile_length, 1)
+
+  return {
+    version: 'pdf_reference_calibration_v1',
+    source: referenceCalibration.source,
+    selected_separator: selectedSeparatorIndex,
+    targets: Object.fromEntries(fracciones.map(fraccion => ([
+      fraccion.key,
+      roundTo(referenceCalibration.targets[fraccion.key], 4),
+    ]))),
+    total_target: roundTo(fracciones.reduce((total, fraccion) => total + referenceCalibration.targets[fraccion.key], 0), 4),
+    separator_ratios: review.separatorRatios.map(ratio => Number(ratio.toFixed(6))),
+    applied_ranges: Object.fromEntries(fracciones.map(fraccion => {
+      const fraction = review.fractions[fraccion.key]
+      return [fraccion.key, {
+        start: fraction.start,
+        end: fraction.end,
+        start_percent: roundTo((fraction.start / Math.max(profileLength - 1, 1)) * 100, 2),
+        end_percent: roundTo((fraction.end / Math.max(profileLength - 1, 1)) * 100, 2),
+        area: fraction.area,
+        percentage: fraction.percentage,
+        concentration: fraction.concentration,
+      }]
+    })),
+    processor_ranges: Object.fromEntries(fracciones.map(fraccion => {
+      const fraction = result.fractions[fraccion.key]
+      return [fraccion.key, {
+        start: fraction.start,
+        end: fraction.end,
+        start_percent: roundTo((fraction.start / Math.max(profileLength - 1, 1)) * 100, 2),
+        end_percent: roundTo((fraction.end / Math.max(profileLength - 1, 1)) * 100, 2),
+        area: fraction.area,
+        percentage: fraction.percentage,
+        concentration: fraction.concentration,
+      }]
+    })),
+    processor_source: processorMeta.source,
+    algorithm_version: processorMeta.algorithmVersion,
+    calibration_profile: processorMeta.calibrationProfile || null,
+    calibration_version: processorMeta.calibrationVersion || null,
+    crop_used: result.crop_used,
+    axis: result.axis,
+    profile_length: result.profile_length,
+    total_area: result.total_area,
+    peaks: result.peaks,
+    valleys: result.valleys,
+    updated_at: new Date().toISOString(),
+  }
+}
+
 function mergeRawResultWithManualReview(
   rawResult: Record<string, unknown> | null,
   review: ManualReviewData | null,
   selectedSeparatorIndex: number,
+  referenceCalibration?: ReferenceCalibrationState | null,
+  result?: LocalProcessorResult | null,
+  processorMeta?: ProcessorMeta,
 ) {
-  if (!review) return rawResult ?? {}
-  return {
-    ...(rawResult ?? {}),
-    manual_review: buildStoredManualReview(review, selectedSeparatorIndex),
+  const nextRawResult = { ...(rawResult ?? {}) }
+
+  if (review) {
+    nextRawResult.manual_review = buildStoredManualReview(review, selectedSeparatorIndex)
   }
+
+  if (referenceCalibration === null) {
+    delete nextRawResult.reference_calibration
+  } else if (referenceCalibration && review && result && processorMeta) {
+    nextRawResult.reference_calibration = buildStoredReferenceCalibration(
+      referenceCalibration,
+      review,
+      result,
+      processorMeta,
+      selectedSeparatorIndex,
+    )
+  }
+
+  return nextRawResult
 }
 
 function readStoredSeparatorRatios(rawResult: Record<string, unknown> | null, result: LocalProcessorResult) {
@@ -396,6 +488,35 @@ function readStoredSelectedSeparator(rawResult: Record<string, unknown> | null) 
   const selected = manualReview.selected_separator
   if (!isNumber(selected)) return 1
   return Math.min(Math.max(Math.round(selected), 0), REVIEW_SEPARATOR_COUNT - 1)
+}
+
+function readStoredReferenceCalibration(rawResult: Record<string, unknown> | null): ReferenceCalibrationState | null {
+  const stored = rawResult?.reference_calibration
+  if (!isRecord(stored)) return null
+
+  const targets = stored.targets
+  if (!isRecord(targets)) return null
+
+  const parsedTargets = fracciones.reduce<ReferenceFractionTargets>((accumulator, fraccion) => {
+    const value = targets[fraccion.key]
+    accumulator[fraccion.key] = value == null ? Number.NaN : isNumber(value) ? value : Number(value)
+    return accumulator
+  }, {
+    albumina: 0,
+    alfa_1: 0,
+    alfa_2: 0,
+    beta_1: 0,
+    beta_2: 0,
+    gamma: 0,
+  })
+
+  const hasInvalidTarget = fracciones.some(fraccion => !Number.isFinite(parsedTargets[fraccion.key]))
+  if (hasInvalidTarget) return null
+
+  return {
+    source: 'pdf_external',
+    targets: parsedTargets,
+  }
 }
 
 function readStoredInputImages(rawResult: Record<string, unknown> | null) {
@@ -1074,6 +1195,7 @@ export default function NuevoAnalisisPage() {
   const [concTotal, setConcTotal] = useState('')
   const [vals, setVals] = useState<FraccionVals>(createEmptyVals())
   const [referenceTargets, setReferenceTargets] = useState<Record<FraccionKey, string>>(createEmptyReferenceTargets)
+  const [referenceCalibration, setReferenceCalibration] = useState<ReferenceCalibrationState | null>(null)
   const [observaciones, setObservaciones] = useState('')
   const [rawResult, setRawResult] = useState<Record<string, unknown> | null>(null)
   const [processorResult, setProcessorResult] = useState<LocalProcessorResult | null>(null)
@@ -1101,6 +1223,7 @@ export default function NuevoAnalisisPage() {
 
   function handleReferenceTarget(key: FraccionKey, value: string) {
     setReferenceTargets(current => ({ ...current, [key]: value }))
+    setReferenceCalibration(null)
   }
 
   function handleApplyReferenceCalibration() {
@@ -1118,10 +1241,12 @@ export default function NuevoAnalisisPage() {
     setError('')
     setSelectedSeparatorIndex(1)
     setSeparatorRatios(buildReferenceSeparatorRatios(processorResult, targets))
+    setReferenceCalibration({ source: 'pdf_external', targets })
     setSuccess('Separadores ajustados contra los valores de referencia. Revisar la curva antes de guardar.')
   }
 
   function handleUseCurrentFractionsAsReference() {
+    setReferenceCalibration(null)
     setReferenceTargets(fracciones.reduce<Record<FraccionKey, string>>((accumulator, fraccion) => {
       accumulator[fraccion.key] = vals[fraccion.key].pct
       return accumulator
@@ -1182,6 +1307,7 @@ export default function NuevoAnalisisPage() {
   function handleResetSeparators() {
     if (!processorResult) return
     setSeparatorRatios(buildDefaultSeparatorRatios(processorResult))
+    setReferenceCalibration(null)
   }
 
   useEffect(() => {
@@ -1246,6 +1372,7 @@ export default function NuevoAnalisisPage() {
       const storedProcessorResult = readLocalProcessor(storedRawResult)
       const storedSeparatorRatios = storedProcessorResult ? readStoredSeparatorRatios(storedRawResult, storedProcessorResult) : null
       const storedSelectedSeparator = readStoredSelectedSeparator(storedRawResult)
+      const storedReferenceCalibration = readStoredReferenceCalibration(storedRawResult)
       const storedInputImages = readStoredInputImages(storedRawResult)
 
       setNumeroPlaca(analisis.numero_placa ?? '')
@@ -1260,6 +1387,8 @@ export default function NuevoAnalisisPage() {
       setBackendStatus(current => resolveRuntimeBackendStatus(current, storedRawResult))
       setSeparatorRatios(storedSeparatorRatios)
       setSelectedSeparatorIndex(storedSelectedSeparator)
+      setReferenceCalibration(storedReferenceCalibration)
+      setReferenceTargets(storedReferenceCalibration ? formatReferenceTargets(storedReferenceCalibration.targets) : createEmptyReferenceTargets())
       setVals({
         albumina: { pct: toTextValue(analisis.albumina_porcentaje), conc: toTextValue(analisis.albumina_concentracion) },
         alfa_1: { pct: toTextValue(analisis.alfa_1_porcentaje), conc: toTextValue(analisis.alfa_1_concentracion) },
@@ -1386,7 +1515,7 @@ export default function NuevoAnalisisPage() {
         backend_fallback_detail: backendFallbackDetail || null,
         processed_at: new Date().toISOString(),
         processed_by: user?.id ?? null,
-      }, nextReview, nextSelectedSeparatorIndex)
+      }, nextReview, nextSelectedSeparatorIndex, null)
       const nextProcessorMeta: ProcessorMeta = {
         source: processorSource,
         algorithmVersion,
@@ -1403,6 +1532,7 @@ export default function NuevoAnalisisPage() {
       setSeparatorRatios(initialSeparatorRatios)
       setSelectedSeparatorIndex(nextSelectedSeparatorIndex)
       setManualReview(nextReview)
+      setReferenceCalibration(null)
 
       const { error: updateError } = await supabase
         .from('analisis_electroforesis')
@@ -1431,7 +1561,14 @@ export default function NuevoAnalisisPage() {
     setError('')
 
     const { data: { user } } = await supabase.auth.getUser()
-    const nextRawResult = mergeRawResultWithManualReview(rawResult, manualReview, selectedSeparatorIndex)
+    const nextRawResult = mergeRawResultWithManualReview(
+      rawResult,
+      manualReview,
+      selectedSeparatorIndex,
+      referenceCalibration,
+      processorResult,
+      processorMeta,
+    )
     const payload = buildAnalysisPayload(user?.id ?? null, nextRawResult)
     const query = analisisId ? supabase.from('analisis_electroforesis').update(payload).eq('id', analisisId) : supabase.from('analisis_electroforesis').insert(payload)
     const { error: saveError } = await query
@@ -1621,6 +1758,11 @@ export default function NuevoAnalisisPage() {
                       <p className="text-[11px]" style={{ color: '#6B7178' }}>
                         Esto activa `Revision manual`. Si el ajuste mejora, guardá el analisis y usá los rangos resultantes como insumo para calibración global.
                       </p>
+                      {referenceCalibration && (
+                        <div className="rounded-xl px-3 py-2 text-[11px]" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', color: '#15803D' }}>
+                          Calibracion PDF activa. Al guardar se persistiran objetivos, rangos aplicados, picos, minimos, crop y version del motor en `resultado_crudo`.
+                        </div>
+                      )}
                     </div>
                   </Card>
                 )}
