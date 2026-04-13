@@ -1452,7 +1452,7 @@ export default function NuevoAnalisisPage() {
       const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto'
 
       let result: LocalProcessorResult
-      let algorithmVersion = 'local-prototype-v1'
+      let algorithmVersion = 'local-prototype-v1.1'
       let processorSource: ProcessorSource = 'frontend_local_fallback'
       let backendFallbackDetail = ''
       let calibrationProfile = ''
@@ -1467,7 +1467,7 @@ export default function NuevoAnalisisPage() {
             totalConcentration: safeTotalConcentration,
           })
           result = backendResult
-          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v2'
+          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v2.1'
           calibrationProfile = backendResult.calibration_profile ?? ''
           calibrationVersion = backendResult.calibration_version ?? ''
           processorSource = 'backend_fastapi'

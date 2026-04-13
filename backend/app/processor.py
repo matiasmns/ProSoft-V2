@@ -9,7 +9,12 @@ from .calibration import FractionWindowConfig, ProcessorCalibration, get_calibra
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v2"
+ALGORITHM_VERSION = "fastapi-opencv-v2.1"
+
+REFERENCE_GUIDED_TARGETS = (0.58, 0.04, 0.10, 0.06, 0.06, 0.16)
+ALBUMIN_GUARD_MIN_PERCENT = 45.0
+ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO = 0.42
+ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO = 1.25
 
 
 def clamp(value: int, minimum: int, maximum: int) -> int:
@@ -138,6 +143,80 @@ def apply_valley_offsets(signal: np.ndarray, peaks: list[int], valleys: list[int
     return shifted
 
 
+def build_area_target_valleys(signal: np.ndarray, targets: tuple[float, ...]) -> list[int]:
+    max_index = max(signal.size - 1, 0)
+    if max_index <= 0:
+        return []
+
+    total_area = trapz_area(signal, 0, max_index)
+    if total_area <= 0:
+        return []
+
+    min_gap = max(2, signal.size // 150)
+    valleys: list[int] = []
+    accumulated_target = 0.0
+    previous_index = 0
+
+    for index, target in enumerate(targets[:-1]):
+        accumulated_target += max(0.0, target)
+        target_area = total_area * accumulated_target
+        running_area = 0.0
+        target_index = max_index
+
+        for cursor in range(max_index):
+            segment_area = float((signal[cursor] + signal[cursor + 1]) / 2.0)
+            next_area = running_area + segment_area
+
+            if next_area >= target_area:
+                fraction_within_segment = (target_area - running_area) / segment_area if segment_area > 0 else 0.0
+                target_index = clamp(cursor + int(round(np.clip(fraction_within_segment, 0.0, 1.0))), 0, max_index)
+                break
+
+            running_area = next_area
+
+        remaining_boundaries = len(targets) - 1 - index
+        min_allowed = previous_index + min_gap
+        max_allowed = max_index - remaining_boundaries * min_gap
+        target_index = clamp(target_index, min_allowed, max_allowed)
+        valleys.append(target_index)
+        previous_index = target_index
+
+    return valleys
+
+
+def apply_albumin_internal_split_guard(signal: np.ndarray, peaks: list[int], valleys: list[int]) -> tuple[list[int], str | None]:
+    if len(valleys) != len(REFERENCE_GUIDED_TARGETS) - 1 or len(peaks) < len(REFERENCE_GUIDED_TARGETS):
+        return valleys, None
+
+    max_index = max(signal.size - 1, 1)
+    total_area = trapz_area(signal, 0, max_index)
+    if total_area <= 0:
+        return valleys, None
+
+    albumin_area = trapz_area(signal, 0, valleys[0])
+    albumin_percent = (albumin_area / total_area) * 100.0
+    first_boundary_ratio = valleys[0] / max_index
+
+    if albumin_percent >= ALBUMIN_GUARD_MIN_PERCENT:
+        return valleys, None
+    if first_boundary_ratio >= ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO:
+        return valleys, None
+
+    albumin_peak = float(signal[peaks[0]])
+    gamma_peak = float(signal[peaks[-1]])
+    if gamma_peak >= albumin_peak * ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO:
+        return valleys, None
+
+    guided_valleys = build_area_target_valleys(signal, REFERENCE_GUIDED_TARGETS)
+    if len(guided_valleys) != len(valleys) or guided_valleys[0] <= valleys[0]:
+        return valleys, None
+
+    return guided_valleys, (
+        "Se aplico correccion automatica por probable valle interno de albumina; "
+        "validar separadores con revision manual o PDF."
+    )
+
+
 def trapz_area(signal: np.ndarray, start: int, end: int) -> float:
     if end <= start:
         return 0.0
@@ -178,6 +257,7 @@ def process_electrophoresis_image(
     detected_peaks = detect_peaks(signal, active_calibration)
     peaks = choose_window_peaks(signal, detected_peaks, active_calibration.fraction_windows)
     valleys = apply_valley_offsets(signal, peaks, find_valleys(signal, peaks), active_calibration.valley_offsets)
+    valleys, albumin_guard_warning = apply_albumin_internal_split_guard(signal, peaks, valleys)
     total_area = trapz_area(signal, 0, signal.size - 1)
 
     if total_area <= 0:
@@ -204,6 +284,8 @@ def process_electrophoresis_image(
         warnings.append("El recorte es pequeno y puede degradar la estimacion.")
     if detected_peaks.size < active_calibration.expected_peak_warning_threshold:
         warnings.append("Se detectaron pocos picos; revisar imagen y parametros.")
+    if albumin_guard_warning:
+        warnings.append(albumin_guard_warning)
 
     return ProcessAnalysisResponse(
         algorithm_version=ALGORITHM_VERSION,

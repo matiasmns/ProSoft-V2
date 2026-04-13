@@ -41,6 +41,10 @@ const FRACTION_WINDOWS: FractionWindow[] = [
 ]
 const SIGNAL_FLOOR = 0.008
 const VALLEY_OFFSETS = [0.018, 0, 0.018, -0.055, 0.055]
+const REFERENCE_GUIDED_TARGETS = [0.58, 0.04, 0.10, 0.06, 0.06, 0.16]
+const ALBUMIN_GUARD_MIN_PERCENT = 45
+const ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO = 0.42
+const ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO = 1.25
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
@@ -138,6 +142,79 @@ function applyValleyOffsets(values: number[], valleys: number[], peaks: number[]
     const shifted = valley + Math.round(offset * maxIndex)
     return clamp(shifted, lower, upper)
   })
+}
+
+function buildAreaTargetValleys(values: number[], targets: number[]) {
+  const maxIndex = Math.max(values.length - 1, 0)
+  if (maxIndex <= 0) return []
+
+  const totalArea = trapezoidArea(values, 0, maxIndex)
+  if (totalArea <= 0) return []
+
+  const minGap = Math.max(2, Math.floor(values.length / 150))
+  const valleys: number[] = []
+  let accumulatedTarget = 0
+  let previousIndex = 0
+
+  for (let index = 0; index < targets.length - 1; index += 1) {
+    accumulatedTarget += Math.max(0, targets[index])
+    const targetArea = totalArea * accumulatedTarget
+    let runningArea = 0
+    let targetIndex = maxIndex
+
+    for (let cursor = 0; cursor < maxIndex; cursor += 1) {
+      const segmentArea = (values[cursor] + values[cursor + 1]) / 2
+      const nextArea = runningArea + segmentArea
+
+      if (nextArea >= targetArea) {
+        const fractionWithinSegment = segmentArea > 0 ? (targetArea - runningArea) / segmentArea : 0
+        targetIndex = clamp(cursor + Math.round(clamp(fractionWithinSegment, 0, 1)), 0, maxIndex)
+        break
+      }
+
+      runningArea = nextArea
+    }
+
+    const remainingBoundaries = targets.length - 1 - index
+    const minAllowed = previousIndex + minGap
+    const maxAllowed = maxIndex - remainingBoundaries * minGap
+    targetIndex = clamp(targetIndex, minAllowed, maxAllowed)
+    valleys.push(targetIndex)
+    previousIndex = targetIndex
+  }
+
+  return valleys
+}
+
+function applyAlbuminInternalSplitGuard(values: number[], peaks: number[], valleys: number[]) {
+  if (valleys.length !== REFERENCE_GUIDED_TARGETS.length - 1 || peaks.length < REFERENCE_GUIDED_TARGETS.length) {
+    return { valleys, warning: '' }
+  }
+
+  const maxIndex = Math.max(values.length - 1, 1)
+  const totalArea = trapezoidArea(values, 0, maxIndex)
+  if (totalArea <= 0) return { valleys, warning: '' }
+
+  const albuminArea = trapezoidArea(values, 0, valleys[0])
+  const albuminPercent = (albuminArea / totalArea) * 100
+  const firstBoundaryRatio = valleys[0] / maxIndex
+
+  if (albuminPercent >= ALBUMIN_GUARD_MIN_PERCENT) return { valleys, warning: '' }
+  if (firstBoundaryRatio >= ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO) return { valleys, warning: '' }
+
+  const albuminPeak = values[peaks[0]] ?? 0
+  const gammaPeak = values[peaks[peaks.length - 1]] ?? 0
+  if (gammaPeak >= albuminPeak * ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO) return { valleys, warning: '' }
+
+  const guidedValleys = buildAreaTargetValleys(values, REFERENCE_GUIDED_TARGETS)
+  if (guidedValleys.length !== valleys.length || guidedValleys[0] <= valleys[0]) {
+    return { valleys, warning: '' }
+  }
+
+  return {
+    valleys: guidedValleys,
+    warning: 'Se aplico correccion automatica por probable valle interno de albumina; validar separadores con revision manual o PDF.',
+  }
 }
 
 function detectLocalMaxima(values: number[]) {
@@ -305,7 +382,9 @@ export async function processElectrophoresisImage(input: {
   const detectedValleys = peakIndexes.slice(0, -1).map((peakIndex, index) => (
     findValley(normalizedProfile, peakIndex, peakIndexes[index + 1])
   ))
-  const valleys = applyValleyOffsets(normalizedProfile, detectedValleys, peakIndexes)
+  const shiftedValleys = applyValleyOffsets(normalizedProfile, detectedValleys, peakIndexes)
+  const albuminGuard = applyAlbuminInternalSplitGuard(normalizedProfile, peakIndexes, shiftedValleys)
+  const valleys = albuminGuard.valleys
 
   const fractionBounds = FRACTION_WINDOWS.map((window, index) => ({
     key: window.key,
@@ -351,6 +430,9 @@ export async function processElectrophoresisImage(input: {
   }
   if (detectedPeaks.length < 4) {
     warningParts.push('Se detectaron pocos picos; revisar imagen y parametros.')
+  }
+  if (albuminGuard.warning) {
+    warningParts.push(albuminGuard.warning)
   }
 
   return {
