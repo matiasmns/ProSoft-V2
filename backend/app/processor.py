@@ -9,7 +9,7 @@ from .calibration import ProcessorCalibration, get_calibration
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.1-clean"
+ALGORITHM_VERSION = "fastapi-opencv-v3.2-calibrated"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
@@ -31,6 +31,9 @@ EARLY_PROFILE_BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
 )
 EARLY_ALBUMIN_PEAK_RATIO = 0.24
 MIN_FRACTION_WIDTH_RATIOS = (0.24, 0.025, 0.055, 0.035, 0.035, 0.08)
+CALIBRATED_BOUNDARY_OFFSETS = (0.0, 0.005, 0.02, 0.0, 0.0)
+FAR_RIGHT_GAMMA_BOUNDARY_RATIO = 0.875
+FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.06
 
 PROJECTION_TOP_FRACTION = 0.38
 MIN_SIGNAL_DYNAMIC_RANGE = 0.035
@@ -164,6 +167,10 @@ def build_boundaries(signal: np.ndarray) -> list[int]:
         upper = min(max_index - remaining_boundaries * min_gap, max_index - future_min_width)
         upper = max(lower, upper)
         boundary = find_local_valley(signal, window[0], window[1], lower, upper)
+        offset = CALIBRATED_BOUNDARY_OFFSETS[boundary_index]
+        if boundary_index == 4 and boundary / max(max_index, 1) >= FAR_RIGHT_GAMMA_BOUNDARY_RATIO:
+            offset += FAR_RIGHT_GAMMA_BOUNDARY_OFFSET
+        boundary = clamp(boundary + int(round(offset * max_index)), lower, upper)
         boundaries.append(boundary)
 
     boundaries.append(max_index)
@@ -219,7 +226,7 @@ def build_warnings(
     boundaries: list[int],
 ) -> list[str]:
     warnings: list[str] = []
-    warnings.append("Motor v3 limpio: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+    warnings.append("Motor v3.2 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
 
     if crop.width < calibration.crop_warning_min_width or crop.height < calibration.crop_warning_min_height:
         warnings.append("El recorte es pequeno y puede degradar la estimacion.")

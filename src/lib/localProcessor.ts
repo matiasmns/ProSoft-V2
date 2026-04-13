@@ -56,6 +56,9 @@ const EARLY_PROFILE_BOUNDARY_WINDOWS: Array<[number, number]> = [
 ]
 const EARLY_ALBUMIN_PEAK_RATIO = 0.24
 const MIN_FRACTION_WIDTH_RATIOS = [0.24, 0.025, 0.055, 0.035, 0.035, 0.08]
+const CALIBRATED_BOUNDARY_OFFSETS = [0, 0.005, 0.02, 0, 0]
+const FAR_RIGHT_GAMMA_BOUNDARY_RATIO = 0.875
+const FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.06
 const PROJECTION_TOP_FRACTION = 0.38
 const MIN_SIGNAL_DYNAMIC_RANGE = 9
 const HIGH_VALLEY_WARNING_LEVEL = 0.34
@@ -262,7 +265,13 @@ function buildBoundaries(values: number[]) {
     const lower = Math.max(boundaries[boundaries.length - 1] + minGap, boundaries[boundaries.length - 1] + currentMinWidth)
     const upper = Math.max(lower, Math.min(maxIndex - remainingBoundaries * minGap, maxIndex - futureMinWidth))
     const [start, end] = activeWindows[index]
-    boundaries.push(findLocalValley(values, start, end, lower, upper))
+    let boundary = findLocalValley(values, start, end, lower, upper)
+    let offset = CALIBRATED_BOUNDARY_OFFSETS[index]
+    if (index === 4 && boundary / Math.max(maxIndex, 1) >= FAR_RIGHT_GAMMA_BOUNDARY_RATIO) {
+      offset += FAR_RIGHT_GAMMA_BOUNDARY_OFFSET
+    }
+    boundary = clamp(boundary + Math.round(offset * maxIndex), lower, upper)
+    boundaries.push(boundary)
   }
 
   boundaries.push(maxIndex)
@@ -376,7 +385,7 @@ export async function processElectrophoresisImage(input: {
     gamma: { start: 0, end: 0, peak_index: 0, area: 0, percentage: 0, concentration: null },
   })
 
-  const warningParts = ['Motor local v3 limpio: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  const warningParts = ['Motor local v3.2 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
   if (cropRect.width < 80 || cropRect.height < 35) {
     warningParts.push('El recorte es pequeno y puede degradar la estimacion.')
   }
