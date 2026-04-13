@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FlaskConical, Users, ClipboardList } from 'lucide-react'
+import { FlaskConical, Users, ClipboardList, SlidersHorizontal } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import { supabase } from '../lib/supabase'
@@ -31,12 +31,19 @@ const cards: Card[] = [
     description: 'Revisa el historial completo de muestras.',
     icon: <ClipboardList size={28} />,
   },
+  {
+    id: 'reference-calibration',
+    label: 'Reference Calibration',
+    description: 'Consulta las calibraciones PDF guardadas para ajustar el motor.',
+    icon: <SlidersHorizontal size={28} />,
+  },
 ]
 
 const cardRoutes: Record<string, string> = {
   'Ingresa Paciente':   '/paciente/nuevo',
   'pacientes':          '/pacientes',
   'historial-muestras': '/historial',
+  'reference-calibration': '/calibracion-referencias',
 }
 
 export default function HomePage() {

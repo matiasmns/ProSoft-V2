@@ -6,6 +6,7 @@ import NuevoAnalisisPage from './pages/NuevoAnalisisPage'
 import CargadeMuestra from './pages/CargadeMuestra'
 import PacientesLista from './pages/PacientesLista'
 import HistorialMuestra from './pages/HistorialMuestra'
+import ReferenceCalibrationPage from './pages/ReferenceCalibrationPage'
 import InstallSystemPrompt from './components/InstallSystemPrompt'
 
 function App() {
@@ -21,6 +22,7 @@ function App() {
         <Route path="/muestra/nueva" element={<CargadeMuestra />} />
         <Route path="/analisis/nuevo" element={<NuevoAnalisisPage />} />
         <Route path="/historial" element={<HistorialMuestra />} />
+        <Route path="/calibracion-referencias" element={<ReferenceCalibrationPage />} />
       </Routes>
     </BrowserRouter>
   )

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ClipboardList, Download, FlaskConical, LogOut, Users } from 'lucide-react'
+import { ClipboardList, Download, FlaskConical, LogOut, SlidersHorizontal, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import {
@@ -20,6 +20,7 @@ const navItems: NavItem[] = [
   { id: 'Ingresar Muestra', label: 'Ingresar Muestra', icon: <FlaskConical size={18} />, route: '/paciente/nuevo' },
   { id: 'pacientes', label: 'Pacientes', icon: <Users size={18} />, route: '/pacientes' },
   { id: 'historial-muestras', label: 'Historial de Muestras', icon: <ClipboardList size={18} />, route: '/historial' },
+  { id: 'reference-calibration', label: 'Reference Calibration', icon: <SlidersHorizontal size={18} />, route: '/calibracion-referencias' },
 ]
 
 type Props = {
