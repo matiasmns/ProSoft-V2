@@ -1,7 +1,7 @@
 {
   "profile_name": "serum_protein_default",
-  "profile_version": "2026-04-13-a",
-  "description": "Perfil base con ventana de albumina ampliada, piso de senal, offsets de minimos y guarda automatica contra valles internos falsos de albumina.",
+  "profile_version": "2026-04-13-b",
+  "description": "Perfil base con guarda contra valles internos falsos de albumina y guia global inicial ajustada con las primeras muestras PDF de calibracion.",
   "clahe_clip_limit": 2.0,
   "clahe_tile_grid_size": 8,
   "gaussian_blur_kernel_size": 5,

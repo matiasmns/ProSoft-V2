@@ -9,9 +9,9 @@ from .calibration import FractionWindowConfig, ProcessorCalibration, get_calibra
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v2.1"
+ALGORITHM_VERSION = "fastapi-opencv-v2.2"
 
-REFERENCE_GUIDED_TARGETS = (0.58, 0.04, 0.10, 0.06, 0.06, 0.16)
+REFERENCE_GUIDED_TARGETS = (0.583, 0.041, 0.110, 0.058, 0.053, 0.155)
 ALBUMIN_GUARD_MIN_PERCENT = 45.0
 ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO = 0.42
 ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO = 1.25

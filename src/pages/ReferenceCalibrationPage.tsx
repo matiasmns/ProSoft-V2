@@ -22,6 +22,7 @@ type ReferenceCalibrationRow = {
   apellido: string | null
   version: string | null
   source: string | null
+  pattern: string | null
   processor_source: string | null
   algorithm_version: string | null
   calibration_profile: string | null
@@ -57,6 +58,15 @@ const fracciones: Array<{ key: FraccionKey; label: string }> = [
   { key: 'beta_2', label: 'Beta 2' },
   { key: 'gamma', label: 'Gamma' },
 ]
+
+const CALIBRATION_PATTERN_LABELS: Record<string, string> = {
+  normal: 'Normal',
+  gamma_alta: 'Gamma alta',
+  beta_gamma_bridge: 'Puente beta/gamma',
+  albumina_baja: 'Albumina baja',
+  inflamatorio: 'Inflamatorio',
+  otro: 'Otro',
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -139,6 +149,11 @@ function processorSourceLabel(source: string | null) {
   return '---'
 }
 
+function calibrationPatternLabel(pattern: string | null) {
+  if (!pattern) return '---'
+  return CALIBRATION_PATTERN_LABELS[pattern] ?? pattern
+}
+
 export default function ReferenceCalibrationPage() {
   const navigate = useNavigate()
   const [activeSection, setActiveSection] = useState('reference-calibration')
@@ -154,7 +169,7 @@ export default function ReferenceCalibrationPage() {
 
       const { data, error: queryError } = await supabase
         .from('reference_calibration')
-        .select('analisis_id,paciente_id,numero_placa,numero_muestra,numero_paciente,estado,fecha_hora_analisis,updated_at,paciente_codigo,dni,nombre,apellido,version,source,processor_source,algorithm_version,calibration_profile,calibration_version,targets,applied_ranges,processor_ranges,crop_used,peaks,valleys,axis,profile_length,total_area,total_target,reference_updated_at')
+        .select('analisis_id,paciente_id,numero_placa,numero_muestra,numero_paciente,estado,fecha_hora_analisis,updated_at,paciente_codigo,dni,nombre,apellido,version,source,pattern,processor_source,algorithm_version,calibration_profile,calibration_version,targets,applied_ranges,processor_ranges,crop_used,peaks,valleys,axis,profile_length,total_area,total_target,reference_updated_at')
         .order('reference_updated_at', { ascending: false, nullsFirst: false })
         .returns<ReferenceCalibrationRow[]>()
 
@@ -224,6 +239,7 @@ export default function ReferenceCalibrationPage() {
                       <th className="text-left px-3 py-3" style={{ color: '#5C894A' }}>Fecha</th>
                       <th className="text-left px-3 py-3" style={{ color: '#5C894A' }}>Paciente</th>
                       <th className="text-left px-3 py-3" style={{ color: '#5C894A' }}>Muestra</th>
+                      <th className="text-left px-3 py-3" style={{ color: '#5C894A' }}>Patron</th>
                       <th className="text-left px-3 py-3" style={{ color: '#5C894A' }}>Motor</th>
                       <th className="text-right px-3 py-3" style={{ color: '#5C894A' }}>Alb %</th>
                       <th className="text-right px-3 py-3" style={{ color: '#5C894A' }}>Gamma %</th>
@@ -232,13 +248,13 @@ export default function ReferenceCalibrationPage() {
                   <tbody>
                     {loading ? (
                       <tr>
-                        <td colSpan={6} className="px-3 py-10 text-center text-sm" style={{ color: '#6B7178' }}>
+                        <td colSpan={7} className="px-3 py-10 text-center text-sm" style={{ color: '#6B7178' }}>
                           Cargando calibraciones...
                         </td>
                       </tr>
                     ) : rows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-3 py-10 text-center text-sm" style={{ color: '#6B7178' }}>
+                        <td colSpan={7} className="px-3 py-10 text-center text-sm" style={{ color: '#6B7178' }}>
                           No hay calibraciones PDF guardadas todavia.
                         </td>
                       </tr>
@@ -267,6 +283,7 @@ export default function ReferenceCalibrationPage() {
                             <div className="font-medium">{formatDisplayValue(row.numero_muestra)}</div>
                             <div className="text-xs" style={{ color: '#6B7178' }}>Placa: {formatDisplayValue(row.numero_placa)}</div>
                           </td>
+                          <td className="px-3 py-3" style={{ color: '#54585E' }}>{calibrationPatternLabel(row.pattern)}</td>
                           <td className="px-3 py-3" style={{ color: '#54585E' }}>
                             <div>{processorSourceLabel(row.processor_source)}</div>
                             <div className="text-xs" style={{ color: '#6B7178' }}>{formatDisplayValue(row.algorithm_version)}</div>
@@ -321,6 +338,10 @@ export default function ReferenceCalibrationPage() {
                     <div className="rounded-xl p-3" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
                       <p className="text-[11px] font-semibold" style={{ color: '#6B7178' }}>Motor</p>
                       <p className="mt-1 font-semibold" style={{ color: '#54585E' }}>{processorSourceLabel(selectedRow.processor_source)}</p>
+                    </div>
+                    <div className="rounded-xl p-3" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
+                      <p className="text-[11px] font-semibold" style={{ color: '#6B7178' }}>Patron</p>
+                      <p className="mt-1 font-semibold" style={{ color: '#54585E' }}>{calibrationPatternLabel(selectedRow.pattern)}</p>
                     </div>
                     <div className="rounded-xl p-3" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
                       <p className="text-[11px] font-semibold" style={{ color: '#6B7178' }}>Perfil</p>

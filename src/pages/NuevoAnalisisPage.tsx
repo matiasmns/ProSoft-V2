@@ -70,7 +70,9 @@ type ProcessorMeta = {
 type ReferenceCalibrationState = {
   source: 'pdf_external'
   targets: ReferenceFractionTargets
+  pattern: CalibrationPattern
 }
+type CalibrationPattern = 'normal' | 'gamma_alta' | 'beta_gamma_bridge' | 'albumina_baja' | 'inflamatorio' | 'otro'
 type FractionReference = {
   percent: string
   concentration: string
@@ -87,6 +89,15 @@ const fracciones: Array<{ key: FraccionKey; label: string }> = [
 const globulinFractionKeys: FraccionKey[] = ['alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
 const alphaFractionKeys: FraccionKey[] = ['alfa_1', 'alfa_2']
 const betaFractionKeys: FraccionKey[] = ['beta_1', 'beta_2']
+const DEFAULT_CALIBRATION_PATTERN: CalibrationPattern = 'normal'
+const CALIBRATION_PATTERN_OPTIONS: Array<{ value: CalibrationPattern; label: string }> = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'gamma_alta', label: 'Gamma alta' },
+  { value: 'beta_gamma_bridge', label: 'Puente beta/gamma' },
+  { value: 'albumina_baja', label: 'Albumina baja' },
+  { value: 'inflamatorio', label: 'Inflamatorio' },
+  { value: 'otro', label: 'Otro' },
+]
 // Rangos iniciales de referencia para SPEP en adultos. Confirmar y ajustar segun el metodo validado del laboratorio.
 const FRACTION_REFERENCES: Record<FraccionKey, FractionReference> = {
   albumina: { percent: '55.8 - 66.1', concentration: '40.20 - 47.60' },
@@ -161,8 +172,8 @@ function createEmptyReferenceTargets(): Record<FraccionKey, string> {
   }
 }
 
-function focusGreen(event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) { event.currentTarget.style.borderColor = '#5C894A' }
-function blurGray(event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) { event.currentTarget.style.borderColor = '#DFE0E5' }
+function focusGreen(event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) { event.currentTarget.style.borderColor = '#5C894A' }
+function blurGray(event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) { event.currentTarget.style.borderColor = '#DFE0E5' }
 function toTextValue(value: number | null | undefined) { return value != null ? value.toString() : '' }
 
 function calculateConcentration(percentual: string, total: string) {
@@ -255,6 +266,10 @@ function formatReferenceTargets(targets: ReferenceFractionTargets) {
       : ''
     return accumulator
   }, createEmptyReferenceTargets())
+}
+
+function isCalibrationPattern(value: unknown): value is CalibrationPattern {
+  return CALIBRATION_PATTERN_OPTIONS.some(option => option.value === value)
 }
 
 function formatDisplayValue(value: string | null | undefined, fallback = '---') {
@@ -395,6 +410,7 @@ function buildStoredReferenceCalibration(
   return {
     version: 'pdf_reference_calibration_v1',
     source: referenceCalibration.source,
+    pattern: referenceCalibration.pattern,
     selected_separator: selectedSeparatorIndex,
     targets: Object.fromEntries(fracciones.map(fraccion => ([
       fraccion.key,
@@ -516,6 +532,7 @@ function readStoredReferenceCalibration(rawResult: Record<string, unknown> | nul
   return {
     source: 'pdf_external',
     targets: parsedTargets,
+    pattern: isCalibrationPattern(stored.pattern) ? stored.pattern : DEFAULT_CALIBRATION_PATTERN,
   }
 }
 
@@ -1196,6 +1213,7 @@ export default function NuevoAnalisisPage() {
   const [vals, setVals] = useState<FraccionVals>(createEmptyVals())
   const [referenceTargets, setReferenceTargets] = useState<Record<FraccionKey, string>>(createEmptyReferenceTargets)
   const [referenceCalibration, setReferenceCalibration] = useState<ReferenceCalibrationState | null>(null)
+  const [referenceCalibrationPattern, setReferenceCalibrationPattern] = useState<CalibrationPattern>(DEFAULT_CALIBRATION_PATTERN)
   const [observaciones, setObservaciones] = useState('')
   const [rawResult, setRawResult] = useState<Record<string, unknown> | null>(null)
   const [processorResult, setProcessorResult] = useState<LocalProcessorResult | null>(null)
@@ -1226,6 +1244,12 @@ export default function NuevoAnalisisPage() {
     setReferenceCalibration(null)
   }
 
+  function handleReferenceCalibrationPattern(value: string) {
+    const nextPattern = isCalibrationPattern(value) ? value : DEFAULT_CALIBRATION_PATTERN
+    setReferenceCalibrationPattern(nextPattern)
+    setReferenceCalibration(null)
+  }
+
   function handleApplyReferenceCalibration() {
     if (!processorResult) {
       setError('Primero procesa la muestra para poder calibrar contra valores de referencia.')
@@ -1241,7 +1265,7 @@ export default function NuevoAnalisisPage() {
     setError('')
     setSelectedSeparatorIndex(1)
     setSeparatorRatios(buildReferenceSeparatorRatios(processorResult, targets))
-    setReferenceCalibration({ source: 'pdf_external', targets })
+    setReferenceCalibration({ source: 'pdf_external', targets, pattern: referenceCalibrationPattern })
     setSuccess('Separadores ajustados contra los valores de referencia. Revisar la curva antes de guardar.')
   }
 
@@ -1388,6 +1412,7 @@ export default function NuevoAnalisisPage() {
       setSeparatorRatios(storedSeparatorRatios)
       setSelectedSeparatorIndex(storedSelectedSeparator)
       setReferenceCalibration(storedReferenceCalibration)
+      setReferenceCalibrationPattern(storedReferenceCalibration?.pattern ?? DEFAULT_CALIBRATION_PATTERN)
       setReferenceTargets(storedReferenceCalibration ? formatReferenceTargets(storedReferenceCalibration.targets) : createEmptyReferenceTargets())
       setVals({
         albumina: { pct: toTextValue(analisis.albumina_porcentaje), conc: toTextValue(analisis.albumina_concentracion) },
@@ -1452,7 +1477,7 @@ export default function NuevoAnalisisPage() {
       const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto'
 
       let result: LocalProcessorResult
-      let algorithmVersion = 'local-prototype-v1.1'
+      let algorithmVersion = 'local-prototype-v1.2'
       let processorSource: ProcessorSource = 'frontend_local_fallback'
       let backendFallbackDetail = ''
       let calibrationProfile = ''
@@ -1467,7 +1492,7 @@ export default function NuevoAnalisisPage() {
             totalConcentration: safeTotalConcentration,
           })
           result = backendResult
-          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v2.1'
+          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v2.2'
           calibrationProfile = backendResult.calibration_profile ?? ''
           calibrationVersion = backendResult.calibration_version ?? ''
           processorSource = 'backend_fastapi'
@@ -1719,6 +1744,21 @@ export default function NuevoAnalisisPage() {
                       <p className="text-xs" style={{ color: '#54585E' }}>
                         Ingresá los porcentajes validados del informe externo. El sistema mueve los separadores para aproximar las areas de la curva a esos valores sin modificar el perfil original.
                       </p>
+                      <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 items-center">
+                        <label className="text-xs font-semibold" style={{ color: '#54585E' }}>Patron</label>
+                        <select
+                          value={referenceCalibrationPattern}
+                          onChange={event => handleReferenceCalibrationPattern(event.target.value)}
+                          className={compactInputClass}
+                          style={inputStyle}
+                          onFocus={focusGreen}
+                          onBlur={blurGray}
+                        >
+                          {CALIBRATION_PATTERN_OPTIONS.map(option => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 items-center">
                         {fracciones.map(fraccion => (
                           <div key={`reference-target-${fraccion.key}`} className="contents">
