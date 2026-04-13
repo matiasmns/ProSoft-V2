@@ -1,6 +1,6 @@
 {
   "profile_name": "serum_protein_default",
-  "profile_version": "2026-04-13-b",
+  "profile_version": "2026-04-13-c",
   "description": "Perfil base con guarda contra valles internos falsos de albumina y guia global inicial ajustada con las primeras muestras PDF de calibracion.",
   "clahe_clip_limit": 2.0,
   "clahe_tile_grid_size": 8,
