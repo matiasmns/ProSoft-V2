@@ -60,7 +60,7 @@ def synthetic_cases(calibration: ProcessorCalibration | None = None) -> tuple[Sy
                 "alfa_2": 0.34,
                 "beta_1": 0.22,
                 "beta_2": 0.18,
-                "gamma": 1.60,
+                "gamma": 2.60,
             },
             widths={
                 **default_widths,

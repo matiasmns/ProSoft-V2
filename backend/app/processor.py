@@ -2,19 +2,38 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from scipy.ndimage import gaussian_filter1d, minimum_filter1d
+from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
-from .calibration import FractionWindowConfig, ProcessorCalibration, get_calibration
+from .calibration import ProcessorCalibration, get_calibration
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v2.2"
+ALGORITHM_VERSION = "fastapi-opencv-v3.0-clean"
 
-REFERENCE_GUIDED_TARGETS = (0.5780, 0.0375, 0.1218, 0.0577, 0.0584, 0.1466)
-ALBUMIN_GUARD_MIN_PERCENT = 45.0
-ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO = 0.42
-ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO = 1.25
+FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
+
+# v3 does not infer all limits from detected peaks. It searches for plausible valleys
+# in stable SPEP regions and fails soft with warnings when the curve is ambiguous.
+BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
+    (0.42, 0.58),  # Albumina / Alfa 1
+    (0.50, 0.61),  # Alfa 1 / Alfa 2
+    (0.60, 0.70),  # Alfa 2 / Beta 1
+    (0.68, 0.77),  # Beta 1 / Beta 2
+    (0.75, 0.88),  # Beta 2 / Gamma
+)
+EARLY_PROFILE_BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
+    (0.28, 0.46),
+    (0.50, 0.61),
+    (0.58, 0.68),
+    (0.65, 0.75),
+    (0.76, 0.88),
+)
+EARLY_ALBUMIN_PEAK_RATIO = 0.24
+
+PROJECTION_TOP_FRACTION = 0.38
+MIN_SIGNAL_DYNAMIC_RANGE = 0.035
+HIGH_VALLEY_WARNING_LEVEL = 0.34
 
 
 def clamp(value: int, minimum: int, maximum: int) -> int:
@@ -40,43 +59,52 @@ def build_crop_rect(crop_left: int | None, crop_top: int | None, crop_width: int
 
 
 def prepare_grayscale(image: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    normalized = cv2.normalize(gray, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
-    grid_size = calibration.clahe_tile_grid_size
-    clahe = cv2.createCLAHE(
-        clipLimit=calibration.clahe_clip_limit,
-        tileGridSize=(grid_size, grid_size),
-    )
-    enhanced = clahe.apply(normalized)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float64) / 255.0
     kernel_size = calibration.gaussian_blur_kernel_size
-    return cv2.GaussianBlur(enhanced, (kernel_size, kernel_size), 0)
+    if kernel_size > 1:
+        gray = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
+    return gray
 
 
-def build_projection(gray: np.ndarray, axis: str) -> np.ndarray:
-    inverted = 255.0 - gray.astype(np.float64)
-    return inverted.mean(axis=0 if axis == "x" else 1)
+def robust_projection(gray: np.ndarray, axis: str) -> np.ndarray:
+    darkness = 1.0 - gray
+    if axis == "x":
+        cross_length = darkness.shape[0]
+        top_count = max(1, int(round(cross_length * PROJECTION_TOP_FRACTION)))
+        sorted_values = np.sort(darkness, axis=0)
+        return sorted_values[-top_count:, :].mean(axis=0)
+
+    cross_length = darkness.shape[1]
+    top_count = max(1, int(round(cross_length * PROJECTION_TOP_FRACTION)))
+    sorted_values = np.sort(darkness, axis=1)
+    return sorted_values[:, -top_count:].mean(axis=1)
 
 
 def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
-    smooth_sigma = max(calibration.smoothing_sigma_min, raw_signal.size / calibration.smoothing_sigma_divisor)
-    smooth = gaussian_filter1d(raw_signal, sigma=smooth_sigma)
-    baseline_size = max(calibration.baseline_window_min, raw_signal.size // calibration.baseline_window_divisor)
-    if baseline_size % 2 == 0:
-        baseline_size += 1
-    baseline = minimum_filter1d(smooth, size=baseline_size, mode="nearest")
-    corrected = np.clip(smooth - baseline, 0.0, None)
-    peak = float(corrected.max(initial=0.0))
+    if raw_signal.size < 4:
+        raise ValueError("La imagen recortada es demasiado chica para extraer un densitograma.")
+
+    signal = raw_signal.astype(np.float64)
+    dynamic_range = float(np.percentile(signal, 98) - np.percentile(signal, 2))
+    if dynamic_range < MIN_SIGNAL_DYNAMIC_RANGE:
+        raise ValueError("La imagen no contiene suficiente contraste para extraer una senal util.")
+
+    baseline = float(np.percentile(signal, 5))
+    corrected = np.clip(signal - baseline, 0.0, None)
+    sigma = max(calibration.smoothing_sigma_min, corrected.size / calibration.smoothing_sigma_divisor)
+    smooth = gaussian_filter1d(corrected, sigma=sigma, mode="nearest")
+    smooth = np.clip(smooth - float(np.percentile(smooth, 2)), 0.0, None)
+
+    if calibration.signal_floor > 0:
+        smooth = np.clip(smooth - calibration.signal_floor * float(smooth.max(initial=0.0)), 0.0, None)
+
+    peak = float(smooth.max(initial=0.0))
     if peak <= 0:
         raise ValueError("La imagen no contiene una senal util para el procesamiento.")
 
-    normalized = corrected / peak
-    if calibration.signal_floor > 0:
-        normalized = np.clip(normalized - calibration.signal_floor, 0.0, None)
-        adjusted_peak = float(normalized.max(initial=0.0))
-        if adjusted_peak <= 0:
-            raise ValueError("La imagen no contiene una senal util para el procesamiento.")
-        normalized = normalized / adjusted_peak
-
+    normalized = smooth / peak
+    normalized[0] = 0.0
+    normalized[-1] = 0.0
     return normalized
 
 
@@ -86,135 +114,56 @@ def detect_peaks(signal: np.ndarray, calibration: ProcessorCalibration) -> np.nd
     return peaks
 
 
-def choose_window_peaks(signal: np.ndarray, detected_peaks: np.ndarray, fraction_windows: tuple[FractionWindowConfig, ...]) -> list[int]:
-    selected: list[int] = []
-    length = signal.size - 1
-
-    for window in fraction_windows:
-        start = clamp(int(window.start * length), 0, length)
-        end = clamp(int(window.end * length), start, length)
-        peaks_in_window = [int(peak) for peak in detected_peaks if start <= peak <= end]
-
-        if peaks_in_window:
-            peak_index = max(peaks_in_window, key=lambda peak: float(signal[peak]))
-        else:
-            peak_index = start + int(np.argmax(signal[start : end + 1]))
-
-        selected.append(peak_index)
-
-    return selected
+def find_peak_index(signal: np.ndarray, start: int, end: int) -> int:
+    safe_start = clamp(start, 0, max(0, signal.size - 1))
+    safe_end = clamp(end, safe_start, max(0, signal.size - 1))
+    return safe_start + int(np.argmax(signal[safe_start : safe_end + 1]))
 
 
-def find_valleys(signal: np.ndarray, peaks: list[int]) -> list[int]:
-    valleys: list[int] = []
-    for current, following in zip(peaks, peaks[1:]):
-        if following <= current:
-            valleys.append(current)
-            continue
-        if following - current <= 2:
-            valleys.append(int(round((current + following) / 2)))
-            continue
-        segment = signal[current + 1 : following]
-        valley = current + 1 + int(np.argmin(segment))
-        valleys.append(valley)
-    return valleys
-
-
-def apply_valley_offsets(signal: np.ndarray, peaks: list[int], valleys: list[int], offsets: tuple[float, ...]) -> list[int]:
-    if not offsets:
-        return valleys
-
+def find_local_valley(signal: np.ndarray, start_ratio: float, end_ratio: float, lower: int, upper: int) -> int:
     max_index = max(signal.size - 1, 0)
-    shifted: list[int] = []
-    for index, valley in enumerate(valleys):
-        offset = offsets[index] if index < len(offsets) else 0.0
-        if index == len(valleys) - 1 and offset > 0 and peaks:
-            albumin_peak = float(signal[peaks[0]])
-            gamma_peak = float(signal[peaks[-1]])
-            if gamma_peak >= albumin_peak * 1.2:
-                offset = 0.0
-        lower = peaks[index] + 1
-        upper = peaks[index + 1] - 1
-        if upper < lower:
-            shifted.append(valley)
-            continue
-        shifted_valley = valley + int(round(offset * max_index))
-        shifted.append(clamp(shifted_valley, lower, upper))
-    return shifted
+    start = max(lower, clamp(int(round(start_ratio * max_index)), 0, max_index))
+    end = min(upper, clamp(int(round(end_ratio * max_index)), start, max_index))
+    if end <= start:
+        return clamp(start, lower, upper)
+
+    best_index = start
+    best_score = float("inf")
+    midpoint = (start + end) / 2.0
+    half_width = max((end - start) / 2.0, 1.0)
+
+    for index in range(start, end + 1):
+        previous_value = float(signal[index - 1]) if index > 0 else float(signal[index])
+        current_value = float(signal[index])
+        next_value = float(signal[index + 1]) if index < max_index else float(signal[index])
+        local_shape_penalty = 0.0 if current_value <= previous_value and current_value <= next_value else 0.02
+        center_penalty = abs(index - midpoint) / half_width * 0.01
+        score = current_value + local_shape_penalty + center_penalty
+        if score < best_score:
+            best_score = score
+            best_index = index
+
+    return best_index
 
 
-def build_area_target_valleys(signal: np.ndarray, targets: tuple[float, ...]) -> list[int]:
+def build_boundaries(signal: np.ndarray) -> list[int]:
     max_index = max(signal.size - 1, 0)
-    if max_index <= 0:
-        return []
+    min_gap = max(2, signal.size // 160)
+    boundaries = [0]
+    albumin_peak = find_peak_index(signal, 0, int(round(0.40 * max_index)))
+    albumin_peak_ratio = albumin_peak / max(max_index, 1)
 
-    total_area = trapz_area(signal, 0, max_index)
-    if total_area <= 0:
-        return []
+    active_windows = EARLY_PROFILE_BOUNDARY_WINDOWS if albumin_peak_ratio < EARLY_ALBUMIN_PEAK_RATIO else BOUNDARY_WINDOWS
 
-    min_gap = max(2, signal.size // 150)
-    valleys: list[int] = []
-    accumulated_target = 0.0
-    previous_index = 0
+    for boundary_index, window in enumerate(active_windows):
+        remaining_boundaries = len(BOUNDARY_WINDOWS) - boundary_index
+        lower = boundaries[-1] + min_gap
+        upper = max_index - remaining_boundaries * min_gap
+        boundary = find_local_valley(signal, window[0], window[1], lower, upper)
+        boundaries.append(boundary)
 
-    for index, target in enumerate(targets[:-1]):
-        accumulated_target += max(0.0, target)
-        target_area = total_area * accumulated_target
-        running_area = 0.0
-        target_index = max_index
-
-        for cursor in range(max_index):
-            segment_area = float((signal[cursor] + signal[cursor + 1]) / 2.0)
-            next_area = running_area + segment_area
-
-            if next_area >= target_area:
-                fraction_within_segment = (target_area - running_area) / segment_area if segment_area > 0 else 0.0
-                target_index = clamp(cursor + int(round(np.clip(fraction_within_segment, 0.0, 1.0))), 0, max_index)
-                break
-
-            running_area = next_area
-
-        remaining_boundaries = len(targets) - 1 - index
-        min_allowed = previous_index + min_gap
-        max_allowed = max_index - remaining_boundaries * min_gap
-        target_index = clamp(target_index, min_allowed, max_allowed)
-        valleys.append(target_index)
-        previous_index = target_index
-
-    return valleys
-
-
-def apply_albumin_internal_split_guard(signal: np.ndarray, peaks: list[int], valleys: list[int]) -> tuple[list[int], str | None]:
-    if len(valleys) != len(REFERENCE_GUIDED_TARGETS) - 1 or len(peaks) < len(REFERENCE_GUIDED_TARGETS):
-        return valleys, None
-
-    max_index = max(signal.size - 1, 1)
-    total_area = trapz_area(signal, 0, max_index)
-    if total_area <= 0:
-        return valleys, None
-
-    albumin_area = trapz_area(signal, 0, valleys[0])
-    albumin_percent = (albumin_area / total_area) * 100.0
-    first_boundary_ratio = valleys[0] / max_index
-
-    if albumin_percent >= ALBUMIN_GUARD_MIN_PERCENT:
-        return valleys, None
-    if first_boundary_ratio >= ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO:
-        return valleys, None
-
-    albumin_peak = float(signal[peaks[0]])
-    gamma_peak = float(signal[peaks[-1]])
-    if gamma_peak >= albumin_peak * ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO:
-        return valleys, None
-
-    guided_valleys = build_area_target_valleys(signal, REFERENCE_GUIDED_TARGETS)
-    if len(guided_valleys) != len(valleys) or guided_valleys[0] <= valleys[0]:
-        return valleys, None
-
-    return guided_valleys, (
-        "Se aplico correccion automatica por probable valle interno de albumina; "
-        "validar separadores con revision manual o PDF."
-    )
+    boundaries.append(max_index)
+    return boundaries
 
 
 def trapz_area(signal: np.ndarray, start: int, end: int) -> float:
@@ -223,7 +172,7 @@ def trapz_area(signal: np.ndarray, start: int, end: int) -> float:
     return float(np.trapezoid(signal[start : end + 1]))
 
 
-def downsample(signal: np.ndarray, max_points: int = 240) -> list[ProfilePoint]:
+def downsample(signal: np.ndarray, max_points: int) -> list[ProfilePoint]:
     if signal.size <= max_points:
         indices = np.arange(signal.size)
     else:
@@ -231,6 +180,54 @@ def downsample(signal: np.ndarray, max_points: int = 240) -> list[ProfilePoint]:
 
     denominator = max(signal.size - 1, 1)
     return [ProfilePoint(x=float(index / denominator), y=float(signal[index])) for index in indices]
+
+
+def build_fractions(signal: np.ndarray, boundaries: list[int], total_concentration: float | None) -> dict[FractionKey, FractionResult]:
+    total_area = trapz_area(signal, boundaries[0], boundaries[-1])
+    if total_area <= 0:
+        raise ValueError("No fue posible integrar una senal valida para el estudio.")
+
+    fractions: dict[FractionKey, FractionResult] = {}
+    for index, key in enumerate(FRACTION_KEYS):
+        start = boundaries[index]
+        end = boundaries[index + 1]
+        area = trapz_area(signal, start, end)
+        percentage = round((area / total_area) * 100.0, 2)
+        concentration = round((percentage * total_concentration) / 100.0, 2) if total_concentration is not None else None
+        fractions[key] = FractionResult(
+            start=start,
+            end=end,
+            peak_index=find_peak_index(signal, start, end),
+            area=round(area, 4),
+            percentage=percentage,
+            concentration=concentration,
+        )
+
+    return fractions
+
+
+def build_warnings(
+    *,
+    crop: CropPayload,
+    calibration: ProcessorCalibration,
+    detected_peaks: np.ndarray,
+    signal: np.ndarray,
+    boundaries: list[int],
+) -> list[str]:
+    warnings: list[str] = []
+    warnings.append("Motor v3 limpio: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+
+    if crop.width < calibration.crop_warning_min_width or crop.height < calibration.crop_warning_min_height:
+        warnings.append("El recorte es pequeno y puede degradar la estimacion.")
+    if detected_peaks.size < calibration.expected_peak_warning_threshold:
+        warnings.append("Se detectaron pocos picos; revisar imagen y parametros.")
+
+    internal_boundaries = boundaries[1:-1]
+    high_valleys = [boundary for boundary in internal_boundaries if float(signal[boundary]) >= HIGH_VALLEY_WARNING_LEVEL]
+    if high_valleys:
+        warnings.append("Uno o mas separadores caen en valles poco definidos; revisar posiciones manualmente.")
+
+    return warnings
 
 
 def process_electrophoresis_image(
@@ -251,41 +248,22 @@ def process_electrophoresis_image(
     gray = prepare_grayscale(image, active_calibration)
     cropped = gray[crop.top : crop.top + crop.height, crop.left : crop.left + crop.width]
     axis = "x" if crop.width >= crop.height else "y"
-    raw_signal = build_projection(cropped, axis)
+    raw_signal = robust_projection(cropped, axis)
     signal = normalize_signal(raw_signal, active_calibration)
 
     detected_peaks = detect_peaks(signal, active_calibration)
-    peaks = choose_window_peaks(signal, detected_peaks, active_calibration.fraction_windows)
-    valleys = apply_valley_offsets(signal, peaks, find_valleys(signal, peaks), active_calibration.valley_offsets)
-    valleys, albumin_guard_warning = apply_albumin_internal_split_guard(signal, peaks, valleys)
-    total_area = trapz_area(signal, 0, signal.size - 1)
-
-    if total_area <= 0:
-        raise ValueError("No fue posible integrar una senal valida para el estudio.")
-
-    fractions: dict[FractionKey, FractionResult] = {}
-    for index, window in enumerate(active_calibration.fraction_windows):
-        start = 0 if index == 0 else valleys[index - 1]
-        end = signal.size - 1 if index == len(active_calibration.fraction_windows) - 1 else valleys[index]
-        area = trapz_area(signal, start, end)
-        percentage = round((area / total_area) * 100.0, 2)
-        concentration = round((percentage * total_concentration) / 100.0, 2) if total_concentration is not None else None
-        fractions[window.key] = FractionResult(
-            start=start,
-            end=end,
-            peak_index=peaks[index],
-            area=round(area, 4),
-            percentage=percentage,
-            concentration=concentration,
-        )
-
-    warnings: list[str] = []
-    if crop.width < active_calibration.crop_warning_min_width or crop.height < active_calibration.crop_warning_min_height:
-        warnings.append("El recorte es pequeno y puede degradar la estimacion.")
-    if detected_peaks.size < active_calibration.expected_peak_warning_threshold:
-        warnings.append("Se detectaron pocos picos; revisar imagen y parametros.")
-    if albumin_guard_warning:
-        warnings.append(albumin_guard_warning)
+    boundaries = build_boundaries(signal)
+    fractions = build_fractions(signal, boundaries, total_concentration)
+    peaks = [fractions[key].peak_index for key in FRACTION_KEYS]
+    valleys = boundaries[1:-1]
+    total_area = trapz_area(signal, boundaries[0], boundaries[-1])
+    warnings = build_warnings(
+        crop=crop,
+        calibration=active_calibration,
+        detected_peaks=detected_peaks,
+        signal=signal,
+        boundaries=boundaries,
+    )
 
     return ProcessAnalysisResponse(
         algorithm_version=ALGORITHM_VERSION,

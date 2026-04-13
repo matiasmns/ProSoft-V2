@@ -662,7 +662,7 @@ function normalizeIncomingImages(images: IncomingImageState[] | undefined): Imag
   })
 }
 
-const DENSITOGRAM_X_VISUAL_SCALE = 0.74
+const DENSITOGRAM_X_VISUAL_SCALE = 1
 
 function compactDensitogramX(x: number, index: number, lastIndex: number) {
   if (index === 0) return 0
@@ -1496,7 +1496,7 @@ export default function NuevoAnalisisPage() {
       const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto'
 
       let result: LocalProcessorResult
-      let algorithmVersion = 'local-prototype-v1.2'
+      let algorithmVersion = 'local-clean-v3.0'
       let processorSource: ProcessorSource = 'frontend_local_fallback'
       let backendFallbackDetail = ''
       let calibrationProfile = ''
@@ -1511,7 +1511,7 @@ export default function NuevoAnalisisPage() {
             totalConcentration: safeTotalConcentration,
           })
           result = backendResult
-          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v2.2'
+          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v3.0-clean'
           calibrationProfile = backendResult.calibration_profile ?? ''
           calibrationVersion = backendResult.calibration_version ?? ''
           processorSource = 'backend_fastapi'

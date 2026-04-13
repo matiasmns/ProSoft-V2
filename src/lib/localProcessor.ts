@@ -31,23 +31,42 @@ type FractionWindow = {
   end: number
 }
 
+const FRACTION_KEYS: LocalFractionKey[] = ['albumina', 'alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
 const FRACTION_WINDOWS: FractionWindow[] = [
-  { key: 'albumina', start: 0.0, end: 0.35 },
-  { key: 'alfa_1', start: 0.35, end: 0.45 },
-  { key: 'alfa_2', start: 0.45, end: 0.56 },
-  { key: 'beta_1', start: 0.56, end: 0.68 },
-  { key: 'beta_2', start: 0.68, end: 0.78 },
+  { key: 'albumina', start: 0.0, end: 0.42 },
+  { key: 'alfa_1', start: 0.42, end: 0.50 },
+  { key: 'alfa_2', start: 0.50, end: 0.62 },
+  { key: 'beta_1', start: 0.62, end: 0.70 },
+  { key: 'beta_2', start: 0.70, end: 0.78 },
   { key: 'gamma', start: 0.78, end: 1.0 },
 ]
-const SIGNAL_FLOOR = 0.008
-const VALLEY_OFFSETS = [0.018, 0, 0.018, -0.055, 0.055]
-const REFERENCE_GUIDED_TARGETS = [0.5780, 0.0375, 0.1218, 0.0577, 0.0584, 0.1466]
-const ALBUMIN_GUARD_MIN_PERCENT = 45
-const ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO = 0.42
-const ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO = 1.25
+const BOUNDARY_WINDOWS: Array<[number, number]> = [
+  [0.42, 0.58],
+  [0.50, 0.61],
+  [0.60, 0.70],
+  [0.68, 0.77],
+  [0.75, 0.88],
+]
+const EARLY_PROFILE_BOUNDARY_WINDOWS: Array<[number, number]> = [
+  [0.28, 0.46],
+  [0.50, 0.61],
+  [0.58, 0.68],
+  [0.65, 0.75],
+  [0.76, 0.88],
+]
+const EARLY_ALBUMIN_PEAK_RATIO = 0.24
+const PROJECTION_TOP_FRACTION = 0.38
+const MIN_SIGNAL_DYNAMIC_RANGE = 9
+const HIGH_VALLEY_WARNING_LEVEL = 0.34
+const PROFILE_DOWNSAMPLE_POINTS = 700
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
+}
+
+function roundTo(value: number, digits: number) {
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
 }
 
 function getCanvasContext(width: number, height: number) {
@@ -66,40 +85,55 @@ function getCanvasContext(width: number, height: number) {
 function buildCropRect(crop: CropPayload | null | undefined, width: number, height: number) {
   const left = clamp(Math.floor(crop?.izquierda ?? 0), 0, Math.max(0, width - 1))
   const top = clamp(Math.floor(crop?.arriba ?? 0), 0, Math.max(0, height - 1))
-
   const requestedWidth = Math.floor(crop?.ancho ?? width)
   const requestedHeight = Math.floor(crop?.alto ?? height)
-
-  const cropWidth = clamp(requestedWidth > 0 ? requestedWidth : width - left, 1, Math.max(1, width - left))
-  const cropHeight = clamp(requestedHeight > 0 ? requestedHeight : height - top, 1, Math.max(1, height - top))
 
   return {
     left,
     top,
-    width: cropWidth,
-    height: cropHeight,
+    width: clamp(requestedWidth > 0 ? requestedWidth : width - left, 1, Math.max(1, width - left)),
+    height: clamp(requestedHeight > 0 ? requestedHeight : height - top, 1, Math.max(1, height - top)),
   }
 }
 
-function movingAverage(values: number[], windowSize: number) {
-  if (values.length === 0) return values
+function percentile(values: number[], ratio: number) {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((left, right) => left - right)
+  const index = clamp(Math.round((sorted.length - 1) * ratio), 0, sorted.length - 1)
+  return sorted[index]
+}
 
-  const radius = Math.floor(windowSize / 2)
+function gaussianKernel(sigma: number) {
+  const radius = Math.max(1, Math.ceil(sigma * 3))
+  const kernel: number[] = []
+  let total = 0
+
+  for (let offset = -radius; offset <= radius; offset += 1) {
+    const value = Math.exp(-(offset * offset) / (2 * sigma * sigma))
+    kernel.push(value)
+    total += value
+  }
+
+  return kernel.map(value => value / total)
+}
+
+function gaussianSmooth(values: number[], sigma: number) {
+  const kernel = gaussianKernel(sigma)
+  const radius = Math.floor(kernel.length / 2)
+
   return values.map((_, index) => {
     let total = 0
-    let count = 0
-
-    for (let cursor = index - radius; cursor <= index + radius; cursor += 1) {
-      if (cursor < 0 || cursor >= values.length) continue
-      total += values[cursor]
-      count += 1
+    for (let cursor = -radius; cursor <= radius; cursor += 1) {
+      const sourceIndex = clamp(index + cursor, 0, values.length - 1)
+      total += values[sourceIndex] * kernel[cursor + radius]
     }
-
-    return count > 0 ? total / count : values[index]
+    return total
   })
 }
 
 function trapezoidArea(values: number[], start: number, end: number) {
+  if (end <= start) return 0
+
   let total = 0
   for (let index = start; index < end; index += 1) {
     total += (values[index] + values[index + 1]) / 2
@@ -107,119 +141,61 @@ function trapezoidArea(values: number[], start: number, end: number) {
   return total
 }
 
-function findValley(values: number[], from: number, to: number) {
-  if (to <= from) return from
-  if (to - from <= 2) return clamp(Math.round((from + to) / 2), 0, Math.max(0, values.length - 1))
+function buildRobustProjection(data: Uint8ClampedArray, width: number, height: number, axis: 'x' | 'y') {
+  const length = axis === 'x' ? width : height
+  const crossLength = axis === 'x' ? height : width
+  const topCount = Math.max(1, Math.round(crossLength * PROJECTION_TOP_FRACTION))
+  const profile = new Array<number>(length).fill(0)
 
-  let valleyIndex = from + 1
-  let valleyValue = Number.POSITIVE_INFINITY
+  for (let primary = 0; primary < length; primary += 1) {
+    const darknessValues: number[] = []
 
-  for (let index = from + 1; index < to; index += 1) {
-    if (values[index] < valleyValue) {
-      valleyValue = values[index]
-      valleyIndex = index
-    }
-  }
-
-  return valleyIndex
-}
-
-function applyValleyOffsets(values: number[], valleys: number[], peaks: number[]) {
-  const sampleCount = values.length
-  const maxIndex = Math.max(sampleCount - 1, 0)
-  return valleys.map((valley, index) => {
-    let offset = VALLEY_OFFSETS[index] ?? 0
-    if (index === valleys.length - 1 && offset > 0) {
-      const albuminPeak = values[peaks[0]] ?? 0
-      const gammaPeak = values[peaks[peaks.length - 1]] ?? 0
-      if (gammaPeak >= albuminPeak * 1.2) {
-        offset = 0
-      }
-    }
-    const lower = peaks[index] + 1
-    const upper = peaks[index + 1] - 1
-    if (upper < lower) return valley
-    const shifted = valley + Math.round(offset * maxIndex)
-    return clamp(shifted, lower, upper)
-  })
-}
-
-function buildAreaTargetValleys(values: number[], targets: number[]) {
-  const maxIndex = Math.max(values.length - 1, 0)
-  if (maxIndex <= 0) return []
-
-  const totalArea = trapezoidArea(values, 0, maxIndex)
-  if (totalArea <= 0) return []
-
-  const minGap = Math.max(2, Math.floor(values.length / 150))
-  const valleys: number[] = []
-  let accumulatedTarget = 0
-  let previousIndex = 0
-
-  for (let index = 0; index < targets.length - 1; index += 1) {
-    accumulatedTarget += Math.max(0, targets[index])
-    const targetArea = totalArea * accumulatedTarget
-    let runningArea = 0
-    let targetIndex = maxIndex
-
-    for (let cursor = 0; cursor < maxIndex; cursor += 1) {
-      const segmentArea = (values[cursor] + values[cursor + 1]) / 2
-      const nextArea = runningArea + segmentArea
-
-      if (nextArea >= targetArea) {
-        const fractionWithinSegment = segmentArea > 0 ? (targetArea - runningArea) / segmentArea : 0
-        targetIndex = clamp(cursor + Math.round(clamp(fractionWithinSegment, 0, 1)), 0, maxIndex)
-        break
-      }
-
-      runningArea = nextArea
+    for (let secondary = 0; secondary < crossLength; secondary += 1) {
+      const x = axis === 'x' ? primary : secondary
+      const y = axis === 'x' ? secondary : primary
+      const pixelIndex = (y * width + x) * 4
+      const red = data[pixelIndex]
+      const green = data[pixelIndex + 1]
+      const blue = data[pixelIndex + 2]
+      const grayscale = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+      darknessValues.push(255 - grayscale)
     }
 
-    const remainingBoundaries = targets.length - 1 - index
-    const minAllowed = previousIndex + minGap
-    const maxAllowed = maxIndex - remainingBoundaries * minGap
-    targetIndex = clamp(targetIndex, minAllowed, maxAllowed)
-    valleys.push(targetIndex)
-    previousIndex = targetIndex
+    darknessValues.sort((left, right) => left - right)
+    const topValues = darknessValues.slice(-topCount)
+    profile[primary] = topValues.reduce((total, value) => total + value, 0) / topValues.length
   }
 
-  return valleys
+  return profile
 }
 
-function applyAlbuminInternalSplitGuard(values: number[], peaks: number[], valleys: number[]) {
-  if (valleys.length !== REFERENCE_GUIDED_TARGETS.length - 1 || peaks.length < REFERENCE_GUIDED_TARGETS.length) {
-    return { valleys, warning: '' }
+function normalizeSignal(rawProfile: number[]) {
+  if (rawProfile.length < 4) {
+    throw new Error('La imagen recortada es demasiado chica para extraer un densitograma.')
   }
 
-  const maxIndex = Math.max(values.length - 1, 1)
-  const totalArea = trapezoidArea(values, 0, maxIndex)
-  if (totalArea <= 0) return { valleys, warning: '' }
-
-  const albuminArea = trapezoidArea(values, 0, valleys[0])
-  const albuminPercent = (albuminArea / totalArea) * 100
-  const firstBoundaryRatio = valleys[0] / maxIndex
-
-  if (albuminPercent >= ALBUMIN_GUARD_MIN_PERCENT) return { valleys, warning: '' }
-  if (firstBoundaryRatio >= ALBUMIN_GUARD_MAX_FIRST_BOUNDARY_RATIO) return { valleys, warning: '' }
-
-  const albuminPeak = values[peaks[0]] ?? 0
-  const gammaPeak = values[peaks[peaks.length - 1]] ?? 0
-  if (gammaPeak >= albuminPeak * ALBUMIN_GUARD_GAMMA_DOMINANCE_RATIO) return { valleys, warning: '' }
-
-  const guidedValleys = buildAreaTargetValleys(values, REFERENCE_GUIDED_TARGETS)
-  if (guidedValleys.length !== valleys.length || guidedValleys[0] <= valleys[0]) {
-    return { valleys, warning: '' }
+  const dynamicRange = percentile(rawProfile, 0.98) - percentile(rawProfile, 0.02)
+  if (dynamicRange < MIN_SIGNAL_DYNAMIC_RANGE) {
+    throw new Error('La imagen no contiene suficiente contraste para extraer una senal util.')
   }
 
-  return {
-    valleys: guidedValleys,
-    warning: 'Se aplico correccion automatica por probable valle interno de albumina; validar separadores con revision manual o PDF.',
-  }
+  const baseline = percentile(rawProfile, 0.05)
+  const corrected = rawProfile.map(value => Math.max(0, value - baseline))
+  const sigma = Math.max(1.25, corrected.length / 220)
+  const smoothed = gaussianSmooth(corrected, sigma)
+  const localBaseline = percentile(smoothed, 0.02)
+  const cleaned = smoothed.map(value => Math.max(0, value - localBaseline))
+  const maxValue = Math.max(...cleaned, 0.000001)
+  const normalized = cleaned.map(value => value / maxValue)
+
+  normalized[0] = 0
+  normalized[normalized.length - 1] = 0
+  return normalized
 }
 
 function detectLocalMaxima(values: number[]) {
-  const minHeight = 0.05
-  const minDistance = Math.max(8, Math.floor(values.length / 18))
+  const minHeight = 0.025
+  const minDistance = Math.max(8, Math.floor(values.length / 20))
   const candidates: number[] = []
 
   for (let index = 1; index < values.length - 1; index += 1) {
@@ -240,7 +216,71 @@ function detectLocalMaxima(values: number[]) {
   return selected.sort((left, right) => left - right)
 }
 
-function downsampleProfile(values: number[], maxPoints = 240) {
+function findLocalValley(values: number[], startRatio: number, endRatio: number, lower: number, upper: number) {
+  const maxIndex = Math.max(values.length - 1, 0)
+  const start = Math.max(lower, clamp(Math.round(startRatio * maxIndex), 0, maxIndex))
+  const end = Math.min(upper, clamp(Math.round(endRatio * maxIndex), start, maxIndex))
+  if (end <= start) return clamp(start, lower, upper)
+
+  let bestIndex = start
+  let bestScore = Number.POSITIVE_INFINITY
+  const midpoint = (start + end) / 2
+  const halfWidth = Math.max((end - start) / 2, 1)
+
+  for (let index = start; index <= end; index += 1) {
+    const previous = values[index - 1] ?? values[index]
+    const current = values[index]
+    const next = values[index + 1] ?? values[index]
+    const localShapePenalty = current <= previous && current <= next ? 0 : 0.02
+    const centerPenalty = (Math.abs(index - midpoint) / halfWidth) * 0.01
+    const score = current + localShapePenalty + centerPenalty
+
+    if (score < bestScore) {
+      bestScore = score
+      bestIndex = index
+    }
+  }
+
+  return bestIndex
+}
+
+function buildBoundaries(values: number[]) {
+  const maxIndex = Math.max(values.length - 1, 0)
+  const minGap = Math.max(2, Math.floor(values.length / 160))
+  const boundaries = [0]
+  const albuminPeak = findPeakIndex(values, 0, Math.round(0.40 * maxIndex))
+  const albuminPeakRatio = albuminPeak / Math.max(maxIndex, 1)
+  const activeWindows = albuminPeakRatio < EARLY_ALBUMIN_PEAK_RATIO
+    ? EARLY_PROFILE_BOUNDARY_WINDOWS
+    : BOUNDARY_WINDOWS
+
+  for (let index = 0; index < activeWindows.length; index += 1) {
+    const remainingBoundaries = activeWindows.length - index
+    const lower = boundaries[boundaries.length - 1] + minGap
+    const upper = maxIndex - remainingBoundaries * minGap
+    const [start, end] = activeWindows[index]
+    boundaries.push(findLocalValley(values, start, end, lower, upper))
+  }
+
+  boundaries.push(maxIndex)
+  return boundaries
+}
+
+function findPeakIndex(values: number[], start: number, end: number) {
+  let peakIndex = start
+  let peakValue = Number.NEGATIVE_INFINITY
+
+  for (let index = start; index <= end; index += 1) {
+    if (values[index] > peakValue) {
+      peakValue = values[index]
+      peakIndex = index
+    }
+  }
+
+  return peakIndex
+}
+
+function downsampleProfile(values: number[], maxPoints = PROFILE_DOWNSAMPLE_POINTS) {
   if (values.length <= maxPoints) {
     return values.map((value, index) => ({
       x: values.length === 1 ? 0 : index / (values.length - 1),
@@ -248,39 +288,16 @@ function downsampleProfile(values: number[], maxPoints = 240) {
     }))
   }
 
-  const lastIndex = values.length - 1
-  return Array.from({ length: maxPoints }, (_, point) => {
-    const index = Math.round((point / (maxPoints - 1)) * lastIndex)
-    return {
-      x: index / lastIndex,
+  const sampled: Array<{ x: number; y: number }> = []
+  for (let point = 0; point < maxPoints; point += 1) {
+    const index = Math.round((point / Math.max(maxPoints - 1, 1)) * (values.length - 1))
+    sampled.push({
+      x: index / (values.length - 1),
       y: values[index],
-    }
-  })
-}
-
-function buildAxisProfile(data: Uint8ClampedArray, width: number, height: number, axis: 'x' | 'y') {
-  const length = axis === 'x' ? width : height
-  const crossLength = axis === 'x' ? height : width
-  const profile = new Array<number>(length).fill(0)
-
-  for (let primary = 0; primary < length; primary += 1) {
-    let total = 0
-
-    for (let secondary = 0; secondary < crossLength; secondary += 1) {
-      const x = axis === 'x' ? primary : secondary
-      const y = axis === 'x' ? secondary : primary
-      const pixelIndex = (y * width + x) * 4
-      const red = data[pixelIndex]
-      const green = data[pixelIndex + 1]
-      const blue = data[pixelIndex + 2]
-      const grayscale = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-      total += 255 - grayscale
-    }
-
-    profile[primary] = total / crossLength
+    })
   }
 
-  return profile
+  return sampled
 }
 
 async function loadImageData(imageUrl: string) {
@@ -317,85 +334,31 @@ export async function processElectrophoresisImage(input: {
 
   const croppedData = fullCanvas.context.getImageData(cropRect.left, cropRect.top, cropRect.width, cropRect.height)
   const axis: 'x' | 'y' = cropRect.width >= cropRect.height ? 'x' : 'y'
-  const rawProfile = buildAxisProfile(croppedData.data, cropRect.width, cropRect.height, axis)
-
-  const minValue = Math.min(...rawProfile)
-  const correctedProfile = rawProfile.map(value => Math.max(0, value - minValue))
-
-  let smoothWindow = Math.max(5, Math.floor(correctedProfile.length / 30))
-  if (smoothWindow % 2 === 0) smoothWindow += 1
-
-  const smoothedProfile = movingAverage(correctedProfile, smoothWindow)
-  const maxValue = Math.max(...smoothedProfile, 1)
-  let normalizedProfile = smoothedProfile.map(value => value / maxValue)
-  if (SIGNAL_FLOOR > 0) {
-    const flooredProfile = normalizedProfile.map(value => Math.max(0, value - SIGNAL_FLOOR))
-    const flooredMaxValue = Math.max(...flooredProfile, 0.000001)
-    normalizedProfile = flooredProfile.map(value => value / flooredMaxValue)
-  }
-
+  const rawProfile = buildRobustProjection(croppedData.data, cropRect.width, cropRect.height, axis)
+  const normalizedProfile = normalizeSignal(rawProfile)
   const detectedPeaks = detectLocalMaxima(normalizedProfile)
-  const peakIndexes = FRACTION_WINDOWS.map(window => {
-    const start = clamp(Math.floor(window.start * (normalizedProfile.length - 1)), 0, normalizedProfile.length - 1)
-    const end = clamp(Math.floor(window.end * (normalizedProfile.length - 1)), start, normalizedProfile.length - 1)
+  const boundaries = buildBoundaries(normalizedProfile)
+  const valleys = boundaries.slice(1, -1)
+  const totalArea = trapezoidArea(normalizedProfile, boundaries[0], boundaries[boundaries.length - 1])
 
-    // Prefer a real detected peak within this window; fall back to the highest point
-    const windowPeaks = detectedPeaks.filter(p => p >= start && p <= end)
-    if (windowPeaks.length > 0) {
-      return windowPeaks.reduce((best, p) => normalizedProfile[p] > normalizedProfile[best] ? p : best)
-    }
-
-    let peakIndex = start
-    let peakValue = -1
-
-    for (let index = start; index <= end; index += 1) {
-      if (normalizedProfile[index] > peakValue) {
-        peakValue = normalizedProfile[index]
-        peakIndex = index
-      }
-    }
-
-    return peakIndex
-  })
-
-  // Ensure peaks are strictly increasing to avoid zero-area fractions on short profiles
-  for (let index = 1; index < peakIndexes.length; index += 1) {
-    if (peakIndexes[index] <= peakIndexes[index - 1]) {
-      peakIndexes[index] = Math.min(peakIndexes[index - 1] + 1, normalizedProfile.length - 1)
-    }
-  }
-
-  const detectedValleys = peakIndexes.slice(0, -1).map((peakIndex, index) => (
-    findValley(normalizedProfile, peakIndex, peakIndexes[index + 1])
-  ))
-  const shiftedValleys = applyValleyOffsets(normalizedProfile, detectedValleys, peakIndexes)
-  const albuminGuard = applyAlbuminInternalSplitGuard(normalizedProfile, peakIndexes, shiftedValleys)
-  const valleys = albuminGuard.valleys
-
-  const fractionBounds = FRACTION_WINDOWS.map((window, index) => ({
-    key: window.key,
-    start: index === 0 ? 0 : valleys[index - 1],
-    end: index === FRACTION_WINDOWS.length - 1 ? normalizedProfile.length - 1 : valleys[index],
-    peak: peakIndexes[index],
-  }))
-
-  const totalArea = trapezoidArea(normalizedProfile, 0, normalizedProfile.length - 1)
   if (totalArea <= 0) {
-    throw new Error('La imagen no contiene una senal util para el procesamiento preliminar.')
+    throw new Error('No fue posible integrar una senal valida para el estudio.')
   }
 
-  const fractions = fractionBounds.reduce<Record<LocalFractionKey, LocalFractionResult>>((accumulator, bound) => {
-    const area = trapezoidArea(normalizedProfile, bound.start, bound.end)
-    const percentage = Number(((area / totalArea) * 100).toFixed(2))
+  const fractions = FRACTION_WINDOWS.reduce<Record<LocalFractionKey, LocalFractionResult>>((accumulator, window, index) => {
+    const start = boundaries[index]
+    const end = boundaries[index + 1]
+    const area = trapezoidArea(normalizedProfile, start, end)
+    const percentage = roundTo((area / totalArea) * 100, 2)
     const concentration = input.totalConcentration != null
-      ? Number(((percentage * input.totalConcentration) / 100).toFixed(2))
+      ? roundTo((percentage * input.totalConcentration) / 100, 2)
       : null
 
-    accumulator[bound.key] = {
-      start: bound.start,
-      end: bound.end,
-      peak_index: bound.peak,
-      area: Number(area.toFixed(4)),
+    accumulator[window.key] = {
+      start,
+      end,
+      peak_index: findPeakIndex(normalizedProfile, start, end),
+      area: roundTo(area, 4),
       percentage,
       concentration,
     }
@@ -410,15 +373,15 @@ export async function processElectrophoresisImage(input: {
     gamma: { start: 0, end: 0, peak_index: 0, area: 0, percentage: 0, concentration: null },
   })
 
-  const warningParts: string[] = []
-  if (cropRect.width < 40 || cropRect.height < 40) {
+  const warningParts = ['Motor local v3 limpio: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  if (cropRect.width < 80 || cropRect.height < 35) {
     warningParts.push('El recorte es pequeno y puede degradar la estimacion.')
   }
   if (detectedPeaks.length < 4) {
     warningParts.push('Se detectaron pocos picos; revisar imagen y parametros.')
   }
-  if (albuminGuard.warning) {
-    warningParts.push(albuminGuard.warning)
+  if (valleys.some(index => normalizedProfile[index] >= HIGH_VALLEY_WARNING_LEVEL)) {
+    warningParts.push('Uno o mas separadores caen en valles poco definidos; revisar posiciones manualmente.')
   }
 
   return {
@@ -427,11 +390,11 @@ export async function processElectrophoresisImage(input: {
     crop_used: cropRect,
     profile_length: normalizedProfile.length,
     detected_peaks: detectedPeaks.length,
-    peaks: peakIndexes,
+    peaks: FRACTION_KEYS.map(key => fractions[key].peak_index),
     valleys,
-    total_area: Number(totalArea.toFixed(4)),
+    total_area: roundTo(totalArea, 4),
     profile: downsampleProfile(normalizedProfile),
     fractions,
-    warning: warningParts.length > 0 ? warningParts.join(' ') : null,
+    warning: warningParts.join(' '),
   }
 }
