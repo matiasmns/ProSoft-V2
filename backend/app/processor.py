@@ -9,18 +9,18 @@ from .calibration import ProcessorCalibration, get_calibration
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.0-clean"
+ALGORITHM_VERSION = "fastapi-opencv-v3.1-clean"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
 # v3 does not infer all limits from detected peaks. It searches for plausible valleys
 # in stable SPEP regions and fails soft with warnings when the curve is ambiguous.
 BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
-    (0.42, 0.58),  # Albumina / Alfa 1
-    (0.50, 0.61),  # Alfa 1 / Alfa 2
-    (0.60, 0.70),  # Alfa 2 / Beta 1
-    (0.68, 0.77),  # Beta 1 / Beta 2
-    (0.75, 0.88),  # Beta 2 / Gamma
+    (0.50, 0.60),  # Albumina / Alfa 1
+    (0.56, 0.66),  # Alfa 1 / Alfa 2
+    (0.66, 0.76),  # Alfa 2 / Beta 1
+    (0.73, 0.82),  # Beta 1 / Beta 2
+    (0.80, 0.90),  # Beta 2 / Gamma
 )
 EARLY_PROFILE_BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
     (0.28, 0.46),
@@ -30,6 +30,7 @@ EARLY_PROFILE_BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
     (0.76, 0.88),
 )
 EARLY_ALBUMIN_PEAK_RATIO = 0.24
+MIN_FRACTION_WIDTH_RATIOS = (0.24, 0.025, 0.055, 0.035, 0.035, 0.08)
 
 PROJECTION_TOP_FRACTION = 0.38
 MIN_SIGNAL_DYNAMIC_RANGE = 0.035
@@ -157,8 +158,11 @@ def build_boundaries(signal: np.ndarray) -> list[int]:
 
     for boundary_index, window in enumerate(active_windows):
         remaining_boundaries = len(BOUNDARY_WINDOWS) - boundary_index
-        lower = boundaries[-1] + min_gap
-        upper = max_index - remaining_boundaries * min_gap
+        current_min_width = int(round(MIN_FRACTION_WIDTH_RATIOS[boundary_index] * max_index))
+        future_min_width = int(round(sum(MIN_FRACTION_WIDTH_RATIOS[boundary_index + 1 :]) * max_index))
+        lower = max(boundaries[-1] + min_gap, boundaries[-1] + current_min_width)
+        upper = min(max_index - remaining_boundaries * min_gap, max_index - future_min_width)
+        upper = max(lower, upper)
         boundary = find_local_valley(signal, window[0], window[1], lower, upper)
         boundaries.append(boundary)
 

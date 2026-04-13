@@ -77,7 +77,7 @@ def synthetic_cases(calibration: ProcessorCalibration | None = None) -> tuple[Sy
                 "albumina": 1.30,
                 "alfa_1": 0.18,
                 "alfa_2": 0.36,
-                "beta_1": 0.50,
+                "beta_1": 0.60,
                 "beta_2": 0.58,
                 "gamma": 0.70,
             },

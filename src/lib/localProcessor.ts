@@ -41,11 +41,11 @@ const FRACTION_WINDOWS: FractionWindow[] = [
   { key: 'gamma', start: 0.78, end: 1.0 },
 ]
 const BOUNDARY_WINDOWS: Array<[number, number]> = [
-  [0.42, 0.58],
-  [0.50, 0.61],
-  [0.60, 0.70],
-  [0.68, 0.77],
-  [0.75, 0.88],
+  [0.50, 0.60],
+  [0.56, 0.66],
+  [0.66, 0.76],
+  [0.73, 0.82],
+  [0.80, 0.90],
 ]
 const EARLY_PROFILE_BOUNDARY_WINDOWS: Array<[number, number]> = [
   [0.28, 0.46],
@@ -55,6 +55,7 @@ const EARLY_PROFILE_BOUNDARY_WINDOWS: Array<[number, number]> = [
   [0.76, 0.88],
 ]
 const EARLY_ALBUMIN_PEAK_RATIO = 0.24
+const MIN_FRACTION_WIDTH_RATIOS = [0.24, 0.025, 0.055, 0.035, 0.035, 0.08]
 const PROJECTION_TOP_FRACTION = 0.38
 const MIN_SIGNAL_DYNAMIC_RANGE = 9
 const HIGH_VALLEY_WARNING_LEVEL = 0.34
@@ -256,8 +257,10 @@ function buildBoundaries(values: number[]) {
 
   for (let index = 0; index < activeWindows.length; index += 1) {
     const remainingBoundaries = activeWindows.length - index
-    const lower = boundaries[boundaries.length - 1] + minGap
-    const upper = maxIndex - remainingBoundaries * minGap
+    const currentMinWidth = Math.round(MIN_FRACTION_WIDTH_RATIOS[index] * maxIndex)
+    const futureMinWidth = Math.round(MIN_FRACTION_WIDTH_RATIOS.slice(index + 1).reduce((total, width) => total + width, 0) * maxIndex)
+    const lower = Math.max(boundaries[boundaries.length - 1] + minGap, boundaries[boundaries.length - 1] + currentMinWidth)
+    const upper = Math.max(lower, Math.min(maxIndex - remainingBoundaries * minGap, maxIndex - futureMinWidth))
     const [start, end] = activeWindows[index]
     boundaries.push(findLocalValley(values, start, end, lower, upper))
   }

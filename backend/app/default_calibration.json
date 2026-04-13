@@ -1,7 +1,7 @@
 {
   "profile_name": "serum_protein_clean_v3",
-  "profile_version": "2026-04-13-clean-v3",
-  "description": "Motor limpio v3: extraccion robusta de perfil, suavizado conservador y segmentacion por ventanas de valles plausibles. Los resultados automaticos son preliminares y deben validarse con revision manual/PDF.",
+  "profile_version": "2026-04-13-clean-v3.1",
+  "description": "Motor limpio v3.1: extraccion robusta de perfil, suavizado conservador, ventanas de valles plausibles y guarda contra fracciones colapsadas. Los resultados automaticos son preliminares y deben validarse con revision manual/PDF.",
   "clahe_clip_limit": 1.0,
   "clahe_tile_grid_size": 8,
   "gaussian_blur_kernel_size": 5,
