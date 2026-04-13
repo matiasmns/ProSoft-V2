@@ -114,6 +114,7 @@ const inputStyle = { background: '#FFFFFF', color: '#54585E', border: '1px solid
 const PROCESSOR_MODE_STORAGE_KEY = 'prosoft.analysis.processor_mode'
 const BACKEND_STATUS_STORAGE_KEY = 'prosoft.analysis.backend_status'
 const REVIEW_SEPARATOR_COUNT = REVIEW_SEPARATOR_DEFS.length
+const REFERENCE_TARGET_SUM_TOLERANCE = 1
 const PRINT_STYLES = `
   @media screen {
     .analysis-print {
@@ -257,6 +258,18 @@ function parseReferenceTargets(targets: Record<FraccionKey, string>): ReferenceF
 
   if (hasMissingValue || total <= 0) return null
   return parsed
+}
+
+function buildReferenceTargetSummary(targets: Record<FraccionKey, string>) {
+  const values = fracciones.map(fraccion => parseResultNumber(targets[fraccion.key]))
+  const complete = values.every(value => value != null)
+  const total = values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+
+  return {
+    complete,
+    total,
+    withinTolerance: complete && Math.abs(total - 100) <= REFERENCE_TARGET_SUM_TOLERANCE,
+  }
 }
 
 function formatReferenceTargets(targets: ReferenceFractionTargets) {
@@ -1231,6 +1244,7 @@ export default function NuevoAnalisisPage() {
   const printTimestamp = formatPrintTimestamp(new Date())
   const printableImages = images.filter(image => image.preview).slice(0, 2)
   const derivedAnalysisValues = buildDerivedAnalysisValues(vals)
+  const referenceTargetSummary = buildReferenceTargetSummary(referenceTargets)
   const usingProcessorFractions = processorResult && separatorRatios
     ? shouldUseProcessorFractions(processorResult, separatorRatios)
     : false
@@ -1259,6 +1273,11 @@ export default function NuevoAnalisisPage() {
     const targets = parseReferenceTargets(referenceTargets)
     if (!targets) {
       setError('Completa los porcentajes de referencia de las 6 fracciones antes de aplicar la calibracion.')
+      return
+    }
+    const targetSummary = buildReferenceTargetSummary(referenceTargets)
+    if (!targetSummary.withinTolerance) {
+      setError(`La suma de porcentajes del PDF debe estar entre ${(100 - REFERENCE_TARGET_SUM_TOLERANCE).toFixed(0)}% y ${(100 + REFERENCE_TARGET_SUM_TOLERANCE).toFixed(0)}%. Suma actual: ${targetSummary.total.toFixed(2)}%. Revisar transcripcion antes de calibrar.`)
       return
     }
 
@@ -1777,11 +1796,21 @@ export default function NuevoAnalisisPage() {
                           </div>
                         ))}
                       </div>
+                      <div
+                        className="rounded-xl px-3 py-2 text-[11px]"
+                        style={referenceTargetSummary.complete && !referenceTargetSummary.withinTolerance
+                          ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#C0392B' }
+                          : { background: '#F4F5F7', border: '1px solid #DFE0E5', color: '#54585E' }}
+                      >
+                        Suma PDF: {referenceTargetSummary.complete ? `${referenceTargetSummary.total.toFixed(2)}%` : 'Completar 6 fracciones'}.
+                        {' '}Tolerancia aceptada: {100 - REFERENCE_TARGET_SUM_TOLERANCE}% - {100 + REFERENCE_TARGET_SUM_TOLERANCE}%.
+                      </div>
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={handleApplyReferenceCalibration}
-                          className="rounded-lg px-3 py-2 text-xs font-semibold transition"
+                          disabled={!referenceTargetSummary.withinTolerance}
+                          className="rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-60 disabled:cursor-not-allowed"
                           style={{ background: '#4A9151', color: '#F1FAEF', border: '1px solid #4A9151' }}
                         >
                           Ajustar con PDF
