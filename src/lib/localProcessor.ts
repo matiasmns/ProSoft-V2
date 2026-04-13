@@ -45,20 +45,20 @@ const BOUNDARY_WINDOWS: Array<[number, number]> = [
   [0.56, 0.66],
   [0.66, 0.76],
   [0.73, 0.82],
-  [0.80, 0.90],
+  [0.72, 0.87], // Beta 2 / Gamma — calibrado 5 muestras: promedio real 80.5%
 ]
 const EARLY_PROFILE_BOUNDARY_WINDOWS: Array<[number, number]> = [
   [0.28, 0.46],
   [0.50, 0.61],
   [0.58, 0.68],
   [0.65, 0.75],
-  [0.76, 0.88],
+  [0.72, 0.87],
 ]
 const EARLY_ALBUMIN_PEAK_RATIO = 0.24
 const MIN_FRACTION_WIDTH_RATIOS = [0.24, 0.025, 0.055, 0.035, 0.035, 0.08]
 const CALIBRATED_BOUNDARY_OFFSETS = [0, 0.005, 0.02, 0, 0]
 const FAR_RIGHT_GAMMA_BOUNDARY_RATIO = 0.875
-const FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.06
+const FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.09
 const PROJECTION_TOP_FRACTION = 0.38
 const MIN_SIGNAL_DYNAMIC_RANGE = 9
 const HIGH_VALLEY_WARNING_LEVEL = 0.34

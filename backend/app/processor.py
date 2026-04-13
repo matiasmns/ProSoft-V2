@@ -20,20 +20,20 @@ BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
     (0.56, 0.66),  # Alfa 1 / Alfa 2
     (0.66, 0.76),  # Alfa 2 / Beta 1
     (0.73, 0.82),  # Beta 1 / Beta 2
-    (0.80, 0.90),  # Beta 2 / Gamma
+    (0.72, 0.87),  # Beta 2 / Gamma  — calibrado 5 muestras: promedio real 80.5%, ventana corregida
 )
 EARLY_PROFILE_BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
     (0.28, 0.46),
     (0.50, 0.61),
     (0.58, 0.68),
     (0.65, 0.75),
-    (0.76, 0.88),
+    (0.72, 0.87),
 )
 EARLY_ALBUMIN_PEAK_RATIO = 0.24
 MIN_FRACTION_WIDTH_RATIOS = (0.24, 0.025, 0.055, 0.035, 0.035, 0.08)
 CALIBRATED_BOUNDARY_OFFSETS = (0.0, 0.005, 0.02, 0.0, 0.0)
 FAR_RIGHT_GAMMA_BOUNDARY_RATIO = 0.875
-FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.06
+FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.09
 
 PROJECTION_TOP_FRACTION = 0.38
 MIN_SIGNAL_DYNAMIC_RANGE = 0.035
