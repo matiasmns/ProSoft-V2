@@ -25,6 +25,8 @@ export type ReferenceFractionTargets = Record<LocalFractionKey, number>
 const FRACTION_KEYS: LocalFractionKey[] = ['albumina', 'alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
 const MIN_SEPARATOR_COUNT = FRACTION_KEYS.length + 1
 const REFERENCE_VALLEY_SNAP_WINDOW_RATIO = 0.04
+const REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP = 1.25
+const REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP = 1.5
 
 export const REVIEW_SEPARATOR_DEFS: ReviewSeparatorDefinition[] = [
   { id: 'inicio', label: 'Inicio', color: '#D64545' },
@@ -115,6 +117,29 @@ function findNearestReferenceValley(values: number[], targetIndex: number, minAl
   return bestIndex
 }
 
+function buildTargetPercentages(targets: ReferenceFractionTargets, totalTarget: number) {
+  return FRACTION_KEYS.map(key => (Math.max(0, targets[key]) / totalTarget) * 100)
+}
+
+function buildAreaPercentages(values: number[], indices: number[]) {
+  const totalArea = trapezoidArea(values, indices[0], indices[indices.length - 1])
+  const safeTotalArea = totalArea > 0 ? totalArea : 1
+
+  return FRACTION_KEYS.map((_, index) => (
+    (trapezoidArea(values, indices[index], indices[index + 1]) / safeTotalArea) * 100
+  ))
+}
+
+function measureTargetError(values: number[], indices: number[], targetPercentages: number[]) {
+  const percentages = buildAreaPercentages(values, indices)
+  const errors = percentages.map((percentage, index) => Math.abs(percentage - targetPercentages[index]))
+
+  return {
+    totalError: errors.reduce((total, error) => total + error, 0),
+    maxError: Math.max(...errors),
+  }
+}
+
 export function normalizeSeparatorRatios(ratios: number[], sampleCount: number) {
   const maxIndex = Math.max(0, sampleCount - 1)
   if (maxIndex === 0) return new Array(MIN_SEPARATOR_COUNT).fill(0)
@@ -197,6 +222,7 @@ export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targ
   indices.push(maxIndex)
 
   const normalizedIndices = ratiosToIndices(indices.map(index => index / maxIndex), sampleCount)
+  const areaOnlyIndices = [...normalizedIndices]
   const minGap = minGapFor(sampleCount)
 
   for (let index = 1; index < normalizedIndices.length - 1; index += 1) {
@@ -206,6 +232,17 @@ export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targ
       normalizedIndices[index - 1] + minGap,
       normalizedIndices[index + 1] - minGap,
     )
+  }
+
+  const targetPercentages = buildTargetPercentages(targets, totalTarget)
+  const areaOnlyError = measureTargetError(values, areaOnlyIndices, targetPercentages)
+  const snappedError = measureTargetError(values, normalizedIndices, targetPercentages)
+
+  if (
+    snappedError.maxError > REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP ||
+    snappedError.totalError > areaOnlyError.totalError + REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP
+  ) {
+    return normalizeSeparatorRatios(areaOnlyIndices.map(index => index / maxIndex), sampleCount)
   }
 
   return normalizeSeparatorRatios(normalizedIndices.map(index => index / maxIndex), sampleCount)
