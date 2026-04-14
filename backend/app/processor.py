@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, minimum_filter1d
 from scipy.signal import find_peaks
 
 from .calibration import ProcessorCalibration, get_calibration
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.3-calibrated"
+ALGORITHM_VERSION = "fastapi-opencv-v3.4-adaptive-baseline"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
@@ -103,7 +103,11 @@ def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) 
     if dynamic_range < MIN_SIGNAL_DYNAMIC_RANGE:
         raise ValueError("La imagen no contiene suficiente contraste para extraer una senal util.")
 
-    baseline = float(np.percentile(signal, 5))
+    window = max(calibration.baseline_window_min, signal.size // calibration.baseline_window_divisor)
+    if window % 2 == 0:
+        window += 1
+    rolling_min = minimum_filter1d(signal, size=window, mode="nearest")
+    baseline = gaussian_filter1d(rolling_min, sigma=window / 2.0, mode="nearest")
     corrected = np.clip(signal - baseline, 0.0, None)
     sigma = max(calibration.smoothing_sigma_min, corrected.size / calibration.smoothing_sigma_divisor)
     smooth = gaussian_filter1d(corrected, sigma=sigma, mode="nearest")
