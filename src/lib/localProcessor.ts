@@ -57,8 +57,18 @@ const EARLY_PROFILE_BOUNDARY_WINDOWS: Array<[number, number]> = [
 const EARLY_ALBUMIN_PEAK_RATIO = 0.24
 const MIN_FRACTION_WIDTH_RATIOS = [0.24, 0.025, 0.055, 0.035, 0.035, 0.08]
 const CALIBRATED_BOUNDARY_OFFSETS = [0, 0.005, 0.02, 0, 0]
-const FAR_RIGHT_GAMMA_BOUNDARY_RATIO = 0.875
-const FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.09
+const GAMMA_COLLAPSE_PERCENTAGE = 3
+const GAMMA_COLLAPSE_BOUNDARY_MIN_RATIO = 0.84
+const GAMMA_BETA2_TARGET_RATIO = 0.795
+const BETA1_BRIDGE_PERCENTAGE = 12
+const BETA1_BRIDGE_BETA1_BETA2_TARGET_RATIO = 0.72
+const BETA1_BRIDGE_GAMMA_BETA2_TARGET_RATIO = 0.755
+const EARLY_ALFA1_INFLATED_PERCENTAGE = 10
+const EARLY_ALFA1_ALBUMIN_MAX_PERCENTAGE = 50
+const EARLY_ALFA1_BOUNDARY_MAX_RATIO = 0.53
+const EARLY_ALFA1_ALBUMIN_ALFA1_TARGET_RATIO = 0.60
+const EARLY_ALFA1_ALFA1_ALFA2_TARGET_RATIO = 0.64
+const EARLY_ALFA1_ALFA2_BETA1_TARGET_RATIO = 0.72
 const PROJECTION_TOP_FRACTION = 0.38
 const MIN_SIGNAL_DYNAMIC_RANGE = 9
 const HIGH_VALLEY_WARNING_LEVEL = 0.34
@@ -248,6 +258,71 @@ function findLocalValley(values: number[], startRatio: number, endRatio: number,
   return bestIndex
 }
 
+function boundaryRatio(boundaries: number[], boundaryIndex: number, maxIndex: number) {
+  return boundaries[boundaryIndex] / Math.max(maxIndex, 1)
+}
+
+function fractionPercentages(values: number[], boundaries: number[]) {
+  const totalArea = trapezoidArea(values, boundaries[0], boundaries[boundaries.length - 1])
+  if (totalArea <= 0) return FRACTION_KEYS.map(() => 0)
+
+  return FRACTION_KEYS.map((_, index) => (
+    (trapezoidArea(values, boundaries[index], boundaries[index + 1]) / totalArea) * 100
+  ))
+}
+
+function setBoundaryRatio(boundaries: number[], boundaryIndex: number, targetRatio: number, maxIndex: number) {
+  const target = Math.round(targetRatio * maxIndex)
+  const previousBoundary = boundaries[boundaryIndex - 1]
+  const nextBoundary = boundaries[boundaryIndex + 1]
+  const leftMinWidth = Math.round(MIN_FRACTION_WIDTH_RATIOS[boundaryIndex - 1] * maxIndex)
+  const rightMinWidth = Math.round(MIN_FRACTION_WIDTH_RATIOS[boundaryIndex] * maxIndex)
+  let lower = previousBoundary + Math.max(leftMinWidth, 1)
+  let upper = nextBoundary - Math.max(rightMinWidth, 1)
+
+  if (upper < lower) {
+    lower = previousBoundary + 1
+    upper = Math.max(lower, nextBoundary - 1)
+  }
+
+  boundaries[boundaryIndex] = clamp(target, lower, upper)
+}
+
+function applyCalibratedBoundaryRules(values: number[], boundaries: number[]) {
+  const maxIndex = Math.max(values.length - 1, 1)
+  const calibrated = [...boundaries]
+  let percentages = fractionPercentages(values, calibrated)
+  const albuminPercentage = percentages[0]
+  const alfa1Percentage = percentages[1]
+
+  if (
+    alfa1Percentage >= EARLY_ALFA1_INFLATED_PERCENTAGE
+    && albuminPercentage <= EARLY_ALFA1_ALBUMIN_MAX_PERCENTAGE
+    && boundaryRatio(calibrated, 1, maxIndex) <= EARLY_ALFA1_BOUNDARY_MAX_RATIO
+  ) {
+    setBoundaryRatio(calibrated, 3, EARLY_ALFA1_ALFA2_BETA1_TARGET_RATIO, maxIndex)
+    setBoundaryRatio(calibrated, 2, EARLY_ALFA1_ALFA1_ALFA2_TARGET_RATIO, maxIndex)
+    setBoundaryRatio(calibrated, 1, EARLY_ALFA1_ALBUMIN_ALFA1_TARGET_RATIO, maxIndex)
+  }
+
+  percentages = fractionPercentages(values, calibrated)
+  const beta1Percentage = percentages[3]
+  const gammaPercentage = percentages[5]
+  const betaGammaBoundaryRatio = boundaryRatio(calibrated, 5, maxIndex)
+
+  if (gammaPercentage <= GAMMA_COLLAPSE_PERCENTAGE && betaGammaBoundaryRatio >= GAMMA_COLLAPSE_BOUNDARY_MIN_RATIO) {
+    if (beta1Percentage >= BETA1_BRIDGE_PERCENTAGE) {
+      setBoundaryRatio(calibrated, 4, BETA1_BRIDGE_BETA1_BETA2_TARGET_RATIO, maxIndex)
+      setBoundaryRatio(calibrated, 5, BETA1_BRIDGE_GAMMA_BETA2_TARGET_RATIO, maxIndex)
+    } else {
+      setBoundaryRatio(calibrated, 4, Math.min(boundaryRatio(calibrated, 4, maxIndex), GAMMA_BETA2_TARGET_RATIO - 0.04), maxIndex)
+      setBoundaryRatio(calibrated, 5, GAMMA_BETA2_TARGET_RATIO, maxIndex)
+    }
+  }
+
+  return calibrated
+}
+
 function buildBoundaries(values: number[]) {
   const maxIndex = Math.max(values.length - 1, 0)
   const minGap = Math.max(2, Math.floor(values.length / 160))
@@ -266,16 +341,13 @@ function buildBoundaries(values: number[]) {
     const upper = Math.max(lower, Math.min(maxIndex - remainingBoundaries * minGap, maxIndex - futureMinWidth))
     const [start, end] = activeWindows[index]
     let boundary = findLocalValley(values, start, end, lower, upper)
-    let offset = CALIBRATED_BOUNDARY_OFFSETS[index]
-    if (index === 4 && boundary / Math.max(maxIndex, 1) >= FAR_RIGHT_GAMMA_BOUNDARY_RATIO) {
-      offset += FAR_RIGHT_GAMMA_BOUNDARY_OFFSET
-    }
+    const offset = CALIBRATED_BOUNDARY_OFFSETS[index]
     boundary = clamp(boundary + Math.round(offset * maxIndex), lower, upper)
     boundaries.push(boundary)
   }
 
   boundaries.push(maxIndex)
-  return boundaries
+  return applyCalibratedBoundaryRules(values, boundaries)
 }
 
 function findPeakIndex(values: number[], start: number, end: number) {
@@ -385,7 +457,7 @@ export async function processElectrophoresisImage(input: {
     gamma: { start: 0, end: 0, peak_index: 0, area: 0, percentage: 0, concentration: null },
   })
 
-  const warningParts = ['Motor local v3.2 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  const warningParts = ['Motor local v3.3 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
   if (cropRect.width < 80 || cropRect.height < 35) {
     warningParts.push('El recorte es pequeno y puede degradar la estimacion.')
   }

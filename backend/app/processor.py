@@ -9,7 +9,7 @@ from .calibration import ProcessorCalibration, get_calibration
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.2-calibrated"
+ALGORITHM_VERSION = "fastapi-opencv-v3.3-calibrated"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
@@ -32,8 +32,18 @@ EARLY_PROFILE_BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
 EARLY_ALBUMIN_PEAK_RATIO = 0.24
 MIN_FRACTION_WIDTH_RATIOS = (0.24, 0.025, 0.055, 0.035, 0.035, 0.08)
 CALIBRATED_BOUNDARY_OFFSETS = (0.0, 0.005, 0.02, 0.0, 0.0)
-FAR_RIGHT_GAMMA_BOUNDARY_RATIO = 0.875
-FAR_RIGHT_GAMMA_BOUNDARY_OFFSET = -0.09
+GAMMA_COLLAPSE_PERCENTAGE = 3.0
+GAMMA_COLLAPSE_BOUNDARY_MIN_RATIO = 0.84
+GAMMA_BETA2_TARGET_RATIO = 0.795
+BETA1_BRIDGE_PERCENTAGE = 12.0
+BETA1_BRIDGE_BETA1_BETA2_TARGET_RATIO = 0.72
+BETA1_BRIDGE_GAMMA_BETA2_TARGET_RATIO = 0.755
+EARLY_ALFA1_INFLATED_PERCENTAGE = 10.0
+EARLY_ALFA1_ALBUMIN_MAX_PERCENTAGE = 50.0
+EARLY_ALFA1_BOUNDARY_MAX_RATIO = 0.53
+EARLY_ALFA1_ALBUMIN_ALFA1_TARGET_RATIO = 0.60
+EARLY_ALFA1_ALFA1_ALFA2_TARGET_RATIO = 0.64
+EARLY_ALFA1_ALFA2_BETA1_TARGET_RATIO = 0.72
 
 PROJECTION_TOP_FRACTION = 0.38
 MIN_SIGNAL_DYNAMIC_RANGE = 0.035
@@ -150,6 +160,69 @@ def find_local_valley(signal: np.ndarray, start_ratio: float, end_ratio: float, 
     return best_index
 
 
+def boundary_ratio(boundaries: list[int], boundary_index: int, max_index: int) -> float:
+    return boundaries[boundary_index] / max(max_index, 1)
+
+
+def fraction_percentages(signal: np.ndarray, boundaries: list[int]) -> list[float]:
+    total_area = trapz_area(signal, boundaries[0], boundaries[-1])
+    if total_area <= 0:
+        return [0.0 for _ in FRACTION_KEYS]
+
+    return [
+        (trapz_area(signal, boundaries[index], boundaries[index + 1]) / total_area) * 100.0
+        for index in range(len(FRACTION_KEYS))
+    ]
+
+
+def set_boundary_ratio(boundaries: list[int], boundary_index: int, target_ratio: float, max_index: int) -> None:
+    target = int(round(target_ratio * max_index))
+    previous_boundary = boundaries[boundary_index - 1]
+    next_boundary = boundaries[boundary_index + 1]
+    left_min_width = int(round(MIN_FRACTION_WIDTH_RATIOS[boundary_index - 1] * max_index))
+    right_min_width = int(round(MIN_FRACTION_WIDTH_RATIOS[boundary_index] * max_index))
+    lower = previous_boundary + max(left_min_width, 1)
+    upper = next_boundary - max(right_min_width, 1)
+
+    if upper < lower:
+        lower = previous_boundary + 1
+        upper = max(lower, next_boundary - 1)
+
+    boundaries[boundary_index] = clamp(target, lower, upper)
+
+
+def apply_calibrated_boundary_rules(signal: np.ndarray, boundaries: list[int]) -> list[int]:
+    max_index = max(signal.size - 1, 1)
+    calibrated = boundaries.copy()
+    percentages = fraction_percentages(signal, calibrated)
+    albumin_percentage = percentages[0]
+    alfa1_percentage = percentages[1]
+
+    if (
+        alfa1_percentage >= EARLY_ALFA1_INFLATED_PERCENTAGE
+        and albumin_percentage <= EARLY_ALFA1_ALBUMIN_MAX_PERCENTAGE
+        and boundary_ratio(calibrated, 1, max_index) <= EARLY_ALFA1_BOUNDARY_MAX_RATIO
+    ):
+        set_boundary_ratio(calibrated, 3, EARLY_ALFA1_ALFA2_BETA1_TARGET_RATIO, max_index)
+        set_boundary_ratio(calibrated, 2, EARLY_ALFA1_ALFA1_ALFA2_TARGET_RATIO, max_index)
+        set_boundary_ratio(calibrated, 1, EARLY_ALFA1_ALBUMIN_ALFA1_TARGET_RATIO, max_index)
+
+    percentages = fraction_percentages(signal, calibrated)
+    beta1_percentage = percentages[3]
+    gamma_percentage = percentages[5]
+    beta_gamma_boundary_ratio = boundary_ratio(calibrated, 5, max_index)
+
+    if gamma_percentage <= GAMMA_COLLAPSE_PERCENTAGE and beta_gamma_boundary_ratio >= GAMMA_COLLAPSE_BOUNDARY_MIN_RATIO:
+        if beta1_percentage >= BETA1_BRIDGE_PERCENTAGE:
+            set_boundary_ratio(calibrated, 4, BETA1_BRIDGE_BETA1_BETA2_TARGET_RATIO, max_index)
+            set_boundary_ratio(calibrated, 5, BETA1_BRIDGE_GAMMA_BETA2_TARGET_RATIO, max_index)
+        else:
+            set_boundary_ratio(calibrated, 4, min(boundary_ratio(calibrated, 4, max_index), GAMMA_BETA2_TARGET_RATIO - 0.04), max_index)
+            set_boundary_ratio(calibrated, 5, GAMMA_BETA2_TARGET_RATIO, max_index)
+
+    return calibrated
+
+
 def build_boundaries(signal: np.ndarray) -> list[int]:
     max_index = max(signal.size - 1, 0)
     min_gap = max(2, signal.size // 160)
@@ -168,13 +241,11 @@ def build_boundaries(signal: np.ndarray) -> list[int]:
         upper = max(lower, upper)
         boundary = find_local_valley(signal, window[0], window[1], lower, upper)
         offset = CALIBRATED_BOUNDARY_OFFSETS[boundary_index]
-        if boundary_index == 4 and boundary / max(max_index, 1) >= FAR_RIGHT_GAMMA_BOUNDARY_RATIO:
-            offset += FAR_RIGHT_GAMMA_BOUNDARY_OFFSET
         boundary = clamp(boundary + int(round(offset * max_index)), lower, upper)
         boundaries.append(boundary)
 
     boundaries.append(max_index)
-    return boundaries
+    return apply_calibrated_boundary_rules(signal, boundaries)
 
 
 def trapz_area(signal: np.ndarray, start: int, end: int) -> float:
@@ -226,7 +297,7 @@ def build_warnings(
     boundaries: list[int],
 ) -> list[str]:
     warnings: list[str] = []
-    warnings.append("Motor v3.2 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+    warnings.append("Motor v3.3 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
 
     if crop.width < calibration.crop_warning_min_width or crop.height < calibration.crop_warning_min_height:
         warnings.append("El recorte es pequeno y puede degradar la estimacion.")
