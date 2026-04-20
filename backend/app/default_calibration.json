@@ -1,7 +1,7 @@
 {
   "profile_name": "serum_protein_clean_v3",
-  "profile_version": "2026-04-13-clean-v3.4",
-  "description": "Motor limpio v3.4: baseline adaptativo por rolling minimum + suavizado Gaussiano (reemplaza percentil global). Reduce distorsion en fracciones pequenas (Alfa 1, Gamma) por fondo no uniforme. Calibracion condicional por 12 muestras reales. Los resultados automaticos son preliminares y deben validarse con revision manual/PDF.",
+  "profile_version": "2026-04-19-guarded-v3.5",
+  "description": "Motor v3.5: baseline adaptativo protegido. Usa baseline local solo si preserva la forma y posicion del pico principal; si desplaza o deforma la curva, vuelve a baseline global para evitar colapso de fracciones anchas. Calibracion condicional por 12 muestras reales. Los resultados automaticos son preliminares y deben validarse con revision manual/PDF.",
   "clahe_clip_limit": 1.0,
   "clahe_tile_grid_size": 8,
   "gaussian_blur_kernel_size": 5,

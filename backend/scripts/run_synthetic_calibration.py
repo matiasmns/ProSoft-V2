@@ -21,6 +21,39 @@ def dominant_fraction(response: ProcessAnalysisResponse) -> FractionKey:
     )[0]
 
 
+def validate_case(case_name: str, response: ProcessAnalysisResponse, expected_dominant: FractionKey) -> list[str]:
+    errors: list[str] = []
+    total_percentage = round(
+        sum(fraction.percentage for fraction in response.fractions.values()),
+        2,
+    )
+    dominant = dominant_fraction(response)
+
+    if dominant != expected_dominant:
+        errors.append(f"dominante esperado={expected_dominant}, obtenido={dominant}")
+    if abs(total_percentage - 100.0) > 0.75:
+        errors.append(f"suma de porcentajes fuera de tolerancia: {total_percentage}%")
+
+    if case_name == "normal_reference" and response.fractions["albumina"].percentage <= 35.0:
+        errors.append("albumina no queda dominante en referencia normal")
+    if case_name == "gamma_spike_reference":
+        if response.fractions["gamma"].percentage <= 25.0:
+            errors.append("gamma spike no supera 25%")
+        if response.detected_peaks < 4:
+            errors.append("gamma spike detecto menos de 4 picos")
+    if case_name == "beta_gamma_bridge_reference":
+        if response.fractions["beta_1"].percentage <= 8.0:
+            errors.append("beta_1 colapsa por debajo de 8%")
+        if response.fractions["beta_2"].percentage <= 8.0:
+            errors.append("beta_2 colapsa por debajo de 8%")
+        if response.fractions["gamma"].percentage <= 10.0:
+            errors.append("gamma colapsa por debajo de 10%")
+        if any(fraction.percentage <= 0.0 for fraction in response.fractions.values()):
+            errors.append("alguna fraccion queda en cero")
+
+    return errors
+
+
 def main() -> int:
     calibration = get_calibration()
     failures = 0
@@ -40,19 +73,11 @@ def main() -> int:
             calibration=calibration,
         )
 
-        total_percentage = round(
-            sum(fraction.percentage for fraction in response.fractions.values()),
-            2,
-        )
         dominant = dominant_fraction(response)
-        status = "OK"
-
-        if dominant != case.dominant_fraction:
-            status = "CHECK"
-            failures += 1
-        if abs(total_percentage - 100.0) > 0.75:
-            status = "CHECK"
-            failures += 1
+        total_percentage = round(sum(fraction.percentage for fraction in response.fractions.values()), 2)
+        case_errors = validate_case(case.name, response, case.dominant_fraction)
+        status = "CHECK" if case_errors else "OK"
+        failures += len(case_errors)
 
         print(
             f"[{status}] {case.name}: "
@@ -61,6 +86,8 @@ def main() -> int:
             f"picos={response.detected_peaks}, "
             f"warning={response.warning or '-'}"
         )
+        for error in case_errors:
+            print(f"  - {error}")
 
     return 1 if failures else 0
 

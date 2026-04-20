@@ -243,18 +243,18 @@ T.P.: 7.1
 ### Motor automatico
 
 ```text
-Albumina: 60.03
-Alfa 1: 1.67
-Alfa 2: 7.65
-Beta 1: 8.22
-Beta 2: 22.37
-Gamma: 0.06
+Albumina: 59.99
+Alfa 1: 2.11
+Alfa 2: 17.71
+Beta 1: 5.21
+Beta 2: 13.88
+Gamma: 1.10
 ```
 
 ### PDF validado
 
 ```text
-Albumina: 55.2
+Albumina: 58.2
 Alfa 1: 4.3
 Alfa 2: 11.2
 Beta 1: 5.8
@@ -266,11 +266,11 @@ Gamma: 14.8
 
 ```text
 Albumina: 0.0% - 59.3%
-Alfa 1: 59.3% - 61.8%
-Alfa 2: 61.8% - 67.4%
-Beta 1: 67.4% - 73.4%
-Beta 2: 73.4% - 90.0%
-Gamma: 90.0% - 100.0%
+Alfa 1: 59.3% - 62.3%
+Alfa 2: 62.3% - 75.5%
+Beta 1: 75.5% - 78.9%
+Beta 2: 78.9% - 87.0%
+Gamma: 87.0% - 100.0%
 ```
 
 ### Rango tabla / calibrado
@@ -290,10 +290,10 @@ Gamma: 78.9% - 100.0%
 Motor: Backend FastAPI
 Eje: x
 Perfil: 433 puntos
-Area total: 101.2584
-Crop usado: x 0, y 7, ancho 433, alto 52
-Picos: 125 (28.9%), 267 (61.8%), 276 (63.9%), 304 (70.4%), 353 (81.7%), 389 (90.0%)
-Minimos: 256 (59.3%), 267 (61.8%), 291 (67.4%), 317 (73.4%), 389 (90.0%)
+Area total: 101.9569
+Crop usado: x 0, y 0, ancho 433, alto 69
+Picos: 125 (28.9%), 269 (62.3%), 276 (63.9%), 341 (78.9%), 353 (81.7%), 376 (87.0%)
+Minimos: 256 (59.3%), 269 (62.3%), 326 (75.5%), 341 (78.9%), 376 (87.0%)
 ```
 
 ## Muestra 05
@@ -375,7 +375,7 @@ Observaciones:
 
 - 
 
-T.P.: 
+T.P.: 7.34
 
 ```text
 
@@ -384,45 +384,45 @@ T.P.:
 ### Motor automatico
 
 ```text
-Albumina: 
-Alfa 1: 
-Alfa 2: 
-Beta 1:
-Beta 2: 
-Gamma: 
+Albumina: 60.04
+Alfa 1: 1.59
+Alfa 2: 10.50
+Beta 1: 7.51
+Beta 2: 5.47
+Gamma: 14.90
 ```
 
 ### PDF validado
 
 ```text
-Albumina: 
-Alfa 1: 
-Alfa 2: 
-Beta 1: 
-Beta 2: 
-Gamma: 
+Albumina: 58.7
+Alfa 1: 2.9
+Alfa 2: 8.5
+Beta 1: 5.9
+Beta 2: 6.5
+Gamma: 17.5
 ```
 
 ### Rango motor
 
 ```text
-Albumina: 
-Alfa 1: 
-Alfa 2: 
-Beta 1: 
-Beta 2: 
-Gamma: 
+Albumina: 0.0% - 60.1%
+Alfa 1: 60.1% - 63.1%
+Alfa 2: 63.1% - 72.2%
+Beta 1: 72.2% - 77.8%
+Beta 2: 77.8% - 83.5%
+Gamma: 83.5% - 100.0%
 ```
 
 ### Rango tabla / calibrado
 
 ```text
-Albumina: 
-Alfa 1: 
-Alfa 2: 
-Beta 1: 
-Beta 2: 
-Gamma: 
+Albumina: 0.0% - 58.0%
+Alfa 1: 58.0% - 63.1%
+Alfa 2: 63.1% - 70.0%
+Beta 1: 70.0% - 74.7%
+Beta 2: 74.7% - 80.8%
+Gamma: 80.8% - 100.0%
 ```
 
 ### Diagnostico tecnico
@@ -430,12 +430,433 @@ Gamma:
 ```text
 Motor: Backend FastAPI
 Eje: x
-Perfil: 
-Area total: 
-Crop usado: 
-Picos: 
-Minimos: 
+Perfil: 527 puntos
+Area total: 128.0427
+Crop usado: x 0, y 12, ancho 527, alto 77
+Picos: 147 (27.9%), 332 (63.1%), 353 (67.1%), 392 (74.5%), 429 (81.6%), 468 (89.0%)
+Minimos: 316 (60.1%), 332 (63.1%), 380 (72.2%), 409 (77.8%), 439 (83.5%)
 ```
+
+## Muestra 07
+
+Estado: incluir
+
+Observaciones:
+
+- 
+
+T.P.: 6.78
+
+```text
+
+```
+
+### Motor automatico
+
+```text
+Albumina: 47.30
+Alfa 1: 13.01
+Alfa 2: 11.03
+Beta 1: 5.68
+Beta 2: 3.92
+Gamma: 19.06
+```
+
+### PDF validado
+
+```text
+Albumina: 61.1
+Alfa 1: 3.0
+Alfa 2: 9.8
+Beta 1: 5.3
+Beta 2: 4.3
+Gamma: 16.5
+```
+
+### Rango motor
+
+```text
+Albumina: 0.0% - 50.1%
+Alfa 1: 50.1% - 62.5%
+Alfa 2: 62.5% - 72.3%
+Beta 1: 72.3% - 76.7%
+Beta 2: 76.7% - 80.1%
+Gamma: 80.1% - 100.0%
+```
+
+### Rango tabla / calibrado
+
+```text
+Albumina: 0.0% - 64.0%
+Alfa 1: 64.0% - 66.3%
+Alfa 2: 66.3% - 74.1%
+Beta 1: 74.1% - 78.7%
+Beta 2: 78.7% - 81.8%
+Gamma: 81.8% - 100.0%
+```
+
+### Diagnostico tecnico
+
+```text
+Motor: Backend FastAPI
+Eje: x
+Perfil: 348 puntos
+Area total: 69.4594
+Crop usado: x 0, y 3, ancho 348, alto 55
+Picos: 105 (30.3%), 191 (55.0%), 233 (67.1%), 257 (74.1%), 278 (80.1%), 298 (85.9%)
+Minimos: 174 (50.1%), 217 (62.5%), 251 (72.3%), 266 (76.7%), 278 (80.1%)
+```
+
+## Muestra 08
+
+Estado: incluir
+
+Observaciones:
+
+- 
+
+T.P.: 6.7
+
+```text
+
+```
+
+### Motor automatico
+
+```text
+Albumina: 57.94
+Alfa 1: 9.85
+Alfa 2: 11.09
+Beta 1: 21.05
+Beta 2: 0.04
+Gamma: 0.03
+```
+
+### PDF validado
+
+```text
+Albumina: 57.8
+Alfa 1: 4.1
+Alfa 2: 10.6
+Beta 1: 5.6
+Beta 2: 5.3
+Gamma: 16.6
+```
+
+### Rango motor
+
+```text
+Albumina: 0.0% - 54.4%
+Alfa 1: 54.4% - 62.1%
+Alfa 2: 62.1% - 69.5%
+Beta 1: 69.5% - 82.0%
+Beta 2: 82.0% - 85.4%
+Gamma: 85.4% - 100.0%
+```
+
+### Rango tabla / calibrado
+
+```text
+Albumina: 0.0% - 54.2%
+Alfa 1: 54.2% - 58.0%
+Alfa 2: 58.0% - 65.3%
+Beta 1: 65.3% - 69.2%
+Beta 2: 69.2% - 71.8%
+Gamma: 71.8% - 100.0%
+```
+
+### Diagnostico tecnico
+
+```text
+Motor: Backend FastAPI
+Eje: x
+Perfil: 523 puntos
+Area total: 110.0207
+Crop usado: x 0, y 6, ancho 523, alto 62
+Picos: 141 (27.0%), 306 (58.6%), 339 (64.9%), 390 (74.7%), 428 (82.0%), 460 (88.1%)
+Minimos: 284 (54.4%), 324 (62.1%), 363 (69.5%), 428 (82.0%), 446 (85.4%)
+```
+
+## Muestra 09
+
+Estado: incluir
+
+Observaciones:
+
+- 
+
+T.P.: 6.7
+
+```text
+
+```
+
+### Motor automatico
+
+```text
+Albumina: 59.79
+Alfa 1: 1.97
+Alfa 2: 9.49
+Beta 1: 5.04
+Beta 2: 22.53
+Gamma: 1.19
+```
+
+### PDF validado
+
+```text
+Albumina: 63.9
+Alfa 1: 3.0
+Alfa 2: 9.0
+Beta 1: 5.4
+Beta 2: 4.5
+Gamma: 14.8
+```
+
+### Rango motor
+
+```text
+Albumina: 0.0% - 59.2%
+Alfa 1: 59.2% - 62.1%
+Alfa 2: 62.1% - 69.5%
+Beta 1: 69.5% - 73.2%
+Beta 2: 73.2% - 87.0%
+Gamma: 87.0% - 100.0%
+```
+
+### Rango tabla / calibrado
+
+```text
+Albumina: 0.0% - 63.6%
+Alfa 1: 63.6% - 65.0%
+Alfa 2: 65.0% - 72.4%
+Beta 1: 72.4% - 76.9%
+Beta 2: 76.9% - 79.4%
+Gamma: 79.4% - 100.0%
+```
+
+### Diagnostico tecnico
+
+```text
+Motor: Backend FastAPI
+Eje: x
+Perfil: 569 puntos
+Area total: 119.8612
+Crop usado: x 0, y 4, ancho 569, alto 89
+Picos: 164 (28.9%), 353 (62.1%), 365 (64.3%), 401 (70.6%), 465 (81.9%), 494 (87.0%)
+Minimos: 336 (59.2%), 353 (62.1%), 395 (69.5%), 416 (73.2%), 494 (87.0%)
+```
+
+## Muestra 10
+
+Estado: incluir
+
+Observaciones:
+
+- 
+
+T.P.: 7.86
+
+```text
+
+```
+
+### Motor automatico
+
+```text
+Albumina: 57.51
+Alfa 1: 1.64
+Alfa 2: 8.79
+Beta 1: 4.47
+Beta 2: 25.30
+Gamma: 2.30
+```
+
+### PDF validado
+
+```text
+Albumina: 60.7
+Alfa 1: 3.6
+Alfa 2: 8.3
+Beta 1: 5.4
+Beta 2: 3.6
+Gamma: 18.4
+```
+
+### Rango motor
+
+```text
+Albumina: 0.0% - 60.0%
+Alfa 1: 60.0% - 63.1%
+Alfa 2: 63.1% - 70.4%
+Beta 1: 70.4% - 73.9%
+Beta 2: 73.9% - 87.1%
+Gamma: 87.1% - 100.0%
+```
+
+### Rango tabla / calibrado
+
+```text
+Albumina: 0.0% - 64.5%
+Alfa 1: 64.5% - 66.4%
+Alfa 2: 66.4% - 74.1%
+Beta 1: 74.1% - 77.4%
+Beta 2: 77.4% - 79.3%
+Gamma: 79.3% - 100.0%
+```
+
+### Diagnostico tecnico
+
+```text
+Motor: Backend FastAPI
+Eje: x
+Perfil: 426 puntos
+Area total: 97.2752
+Crop usado: x 0, y 0, ancho 426, alto 69
+Picos: 125 (29.4%), 268 (63.1%), 278 (65.4%), 306 (72.0%), 351 (82.6%), 370 (87.1%)
+Minimos: 255 (60.0%), 268 (63.1%), 299 (70.4%), 314 (73.9%), 370 (87.1%)
+```
+
+## Muestra 11
+
+Estado: incluir
+
+Observaciones:
+
+- 
+
+T.P.: 7.08
+
+```text
+
+```
+
+### Motor automatico
+
+```text
+Albumina: 63.41
+Alfa 1: 11.19
+Alfa 2: 10.38
+Beta 1: 13.98
+Beta 2: 1.02
+Gamma: 0.01
+```
+
+### PDF validado
+
+```text
+Albumina: 59.2
+Alfa 1: 5.4
+Alfa 2: 12.6
+Beta 1: 6.9
+Beta 2: 4.9
+Gamma: 11.0
+```
+
+### Rango motor
+
+```text
+Albumina: 0.0% - 56.8%
+Alfa 1: 56.8% - 64.9%
+Alfa 2: 64.9% - 72.4%
+Beta 1: 72.4% - 82.1%
+Beta 2: 82.1% - 86.3%
+Gamma: 86.3% - 100.0%
+```
+
+### Rango tabla / calibrado
+
+```text
+Albumina: 0.0% - 52.8%
+Alfa 1: 52.8% - 58.4%
+Alfa 2: 58.4% - 67.1%
+Beta 1: 67.1% - 71.9%
+Beta 2: 71.9% - 75.1%
+Gamma: 75.1% - 100.0%
+```
+
+### Diagnostico tecnico
+
+```text
+Motor: Backend FastAPI
+Eje: x
+Perfil: 520 puntos
+Area total: 98.7378
+Crop usado: x 0, y 0, ancho 520, alto 78
+Picos: 152 (29.3%), 319 (61.5%), 352 (67.8%), 402 (77.5%), 426 (82.1%), 448 (86.3%)
+Minimos: 295 (56.8%), 337 (64.9%), 376 (72.4%), 426 (82.1%), 448 (86.3%)
+```
+
+## Muestra 12
+
+Estado: incluir
+
+Observaciones:
+
+- 
+
+T.P.: 6.78
+
+```text
+
+```
+
+### Motor automatico
+
+```text
+Albumina: 58.47
+Alfa 1: 9.08
+Alfa 2: 9.92
+Beta 1: 22.14
+Beta 2: 0.24
+Gamma: 0.15
+```
+
+### PDF validado
+
+```text
+Albumina: 61.1
+Alfa 1: 3.0
+Alfa 2: 9.8
+Beta 1: 5.3
+Beta 2: 4.3
+Gamma: 16.5
+```
+
+### Rango motor
+
+```text
+Albumina: 0.0% - 54.8%
+Alfa 1: 54.8% - 62.3%
+Alfa 2: 62.3% - 69.8%
+Beta 1: 69.8% - 82.1%
+Beta 2: 82.1% - 86.3%
+Gamma: 86.3% - 100.0%
+```
+
+### Rango tabla / calibrado
+
+```text
+Albumina: 0.0% - 57.9%
+Alfa 1: 57.9% - 59.4%
+Alfa 2: 59.4% - 67.3%
+Beta 1: 67.3% - 70.8%
+Beta 2: 70.8% - 72.7%
+Gamma: 72.7% - 100.0%
+```
+
+### Diagnostico tecnico
+
+```text
+Motor: Backend FastAPI
+Eje: x
+Perfil: 481 puntos
+Area total: 95.2611
+Crop usado: x 0, y 0, ancho 481, alto 76
+Picos: 120 (25.0%), 283 (59.0%), 335 (69.8%), 360 (75.0%), 394 (82.1%), 425 (88.5%)
+Minimos: 263 (54.8%), 299 (62.3%), 335 (69.8%), 394 (82.1%), 414 (86.3%)
+```
+
 
 
 
@@ -447,35 +868,35 @@ Minimos:
 
 ## Resumen de calibracion
 
-Base actual: 5 muestras reales.
+Base actual: 12 muestras reales.
 
 Estado del set:
 
-- Viable como primera calibracion exploratoria.
+- Viable para una calibracion inicial `v3.3`.
 - Todavia no alcanza como calibracion final cerrada.
-- Muestra 05 debe quedar marcada como `revisar` porque el motor desplaza mucho Albumina/Alfa 1.
-- Muestras 02, 04 y 05 muestran el mismo problema critico: el motor corre el separador Beta 2 / Gamma demasiado a la derecha y deja Gamma casi en cero.
-- Muestra 03 tambien muestra perdida de Gamma, pero con redistribucion fuerte hacia Beta 1.
-- Muestra 01 es la mas estable del set.
+- Muestras 01 y 06 son las mas estables del set.
+- Muestras 05 y 07 deben quedar marcadas como `revisar` por desplazamiento fuerte Albumina / Alfa 1.
+- Muestras 02, 03, 04, 05, 08, 09, 10, 11 y 12 muestran perdida de Gamma o redistribucion fuerte hacia Beta.
+- El patron mas consistente sigue siendo el separador Beta 2 / Gamma demasiado a la derecha.
 
 Lectura principal:
 
 - El motor automatico no esta fallando tanto por area total, sino por posicion de separadores.
 - El separador 5 es el problema mas consistente.
-- El promedio del separador 5 del motor es 88.94%.
-- El promedio del separador 5 calibrado es 80.46%.
-- Offset medio separador 5: -8.48 puntos porcentuales.
+- La mediana del separador 5 del motor es 86.75%.
+- La mediana del separador 5 calibrado es 79.20%.
+- Offset mediano separador 5: -8.75 puntos porcentuales.
 - Esto indica que Beta 2 esta absorbiendo area que corresponde a Gamma.
 
 ### Error promedio por fraccion
 
 ```text
-Albumina: 5.10 puntos porcentuales
-Alfa 1: 4.87 puntos porcentuales
-Alfa 2: 2.44 puntos porcentuales
-Beta 1: 4.51 puntos porcentuales
-Beta 2: 11.97 puntos porcentuales
-Gamma: 12.69 puntos porcentuales
+Albumina: 4.33 puntos porcentuales
+Alfa 1: 4.65 puntos porcentuales
+Alfa 2: 1.85 puntos porcentuales
+Beta 1: 5.28 puntos porcentuales
+Beta 2: 8.81 puntos porcentuales
+Gamma: 11.77 puntos porcentuales
 ```
 
 ### Desplazamiento promedio de separadores
@@ -489,39 +910,41 @@ Separadores:
 5. Beta 2 / Gamma
 
 ```text
-Separador 1: +1.36 puntos porcentuales promedio
-Separador 2: +1.10 puntos porcentuales promedio
-Separador 3: +2.96 puntos porcentuales promedio
-Separador 4: -0.14 puntos porcentuales promedio
-Separador 5: -8.48 puntos porcentuales promedio
+Separador 1: +2.20 promedio / +1.45 mediana
+Separador 2: +0.12 promedio / +1.00 mediana
+Separador 3: +0.07 promedio / -0.15 mediana
+Separador 4: -2.87 promedio / -1.40 mediana
+Separador 5: -7.85 promedio / -8.75 mediana
 ```
 
-### Promedio de separadores calibrados
+### Mediana de separadores calibrados
 
 ```text
-Separador 1: 58.22%
-Separador 2: 63.42%
-Separador 3: 72.24%
-Separador 4: 76.68%
-Separador 5: 80.46%
+Separador 1: 57.95%
+Separador 2: 63.05%
+Separador 3: 71.05%
+Separador 4: 75.90%
+Separador 5: 79.20%
 ```
 
-### Promedio de separadores del motor
+### Mediana de separadores del motor
 
 ```text
-Separador 1: 56.86%
-Separador 2: 62.32%
-Separador 3: 69.28%
-Separador 4: 76.82%
-Separador 5: 88.94%
+Separador 1: 57.50%
+Separador 2: 62.40%
+Separador 3: 71.05%
+Separador 4: 78.35%
+Separador 5: 86.75%
 ```
 
 ### Decision tecnica
 
 ```text
-Perfil recomendado: v3.2 calibracion inicial por offsets conservadores de separadores.
-Offsets recomendados: Separador 1 = 0.00, Separador 2 = +0.50, Separador 3 = +2.00, Separador 4 = 0.00, Separador 5 = -6.00 solo si cae >= 87.5%.
+Perfil recomendado: v3.3 calibracion inicial por reglas condicionales.
+Regla Gamma colapsada: si Gamma <= 3% y Separador 5 >= 84%, corregir Beta 2 / Gamma hacia zona 79.5%.
+Regla puente Beta/Gamma: si Beta 1 >= 12% y Gamma <= 3%, mover Separador 4 hacia 72.0% y Separador 5 hacia 75.5%.
+Regla Alfa 1 inflada: si Alfa 1 >= 10%, Albumina <= 50% y Separador 1 <= 53%, mover separadores 1/2/3 hacia 60.0%, 64.0% y 72.0%.
 Muestras descartadas: ninguna por ahora.
-Muestras a revisar: Muestra 05.
+Muestras a revisar: Muestra 05 y Muestra 07.
 Motivo: el set confirma una falla sistematica de segmentacion Beta 2 / Gamma.
 ```

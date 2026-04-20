@@ -12,6 +12,7 @@ from .schemas import CalibrationResponse, FractionKey, FractionWindowPayload
 
 DEFAULT_CALIBRATION_FILE = Path(__file__).with_name("default_calibration.json")
 CALIBRATION_ENV_VAR = "PROSOFT_CALIBRATION_FILE"
+EXPECTED_FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
 
 class FractionWindowConfig(BaseModel):
@@ -64,6 +65,8 @@ class ProcessorCalibration(BaseModel):
         keys = [window.key for window in self.fraction_windows]
         if len(set(keys)) != len(keys):
             raise ValueError("fraction_windows contiene claves repetidas.")
+        if tuple(keys) != EXPECTED_FRACTION_KEYS:
+            raise ValueError("fraction_windows debe respetar el orden fijo: albumina, alfa_1, alfa_2, beta_1, beta_2, gamma.")
 
         first_window = self.fraction_windows[0]
         last_window = self.fraction_windows[-1]

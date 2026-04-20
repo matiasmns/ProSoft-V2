@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .calibration import get_calibration
-from .processor import process_electrophoresis_image
+from .processor import ALGORITHM_VERSION, process_electrophoresis_image
 from .schemas import CalibrationResponse, HealthResponse, ProcessAnalysisResponse
 
 
@@ -47,7 +47,7 @@ async def healthcheck() -> HealthResponse:
 @app.get("/api/v1/calibration", response_model=CalibrationResponse)
 async def calibration_profile() -> CalibrationResponse:
     calibration = get_calibration()
-    return calibration.to_response(algorithm_version="fastapi-opencv-v2")
+    return calibration.to_response(algorithm_version=ALGORITHM_VERSION)
 
 
 @app.post("/api/v1/analysis/process", response_model=ProcessAnalysisResponse)

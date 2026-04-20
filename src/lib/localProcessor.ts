@@ -457,7 +457,7 @@ export async function processElectrophoresisImage(input: {
     gamma: { start: 0, end: 0, peak_index: 0, area: 0, percentage: 0, concentration: null },
   })
 
-  const warningParts = ['Motor local v3.3 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  const warningParts = ['Motor local v3.5 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
   if (cropRect.width < 80 || cropRect.height < 35) {
     warningParts.push('El recorte es pequeno y puede degradar la estimacion.')
   }

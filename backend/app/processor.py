@@ -9,7 +9,7 @@ from .calibration import ProcessorCalibration, get_calibration
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.4-adaptive-baseline"
+ALGORITHM_VERSION = "fastapi-opencv-v3.5-guarded-baseline"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
@@ -48,6 +48,10 @@ EARLY_ALFA1_ALFA2_BETA1_TARGET_RATIO = 0.72
 PROJECTION_TOP_FRACTION = 0.38
 MIN_SIGNAL_DYNAMIC_RANGE = 0.035
 HIGH_VALLEY_WARNING_LEVEL = 0.34
+GLOBAL_BASELINE_PERCENTILE = 5.0
+RESIDUAL_BASELINE_PERCENTILE = 2.0
+LOCAL_BASELINE_MIN_CORRELATION = 0.90
+LOCAL_BASELINE_MAX_PEAK_SHIFT_RATIO = 0.065
 
 
 def clamp(value: int, minimum: int, maximum: int) -> int:
@@ -94,24 +98,10 @@ def robust_projection(gray: np.ndarray, axis: str) -> np.ndarray:
     return sorted_values[:, -top_count:].mean(axis=1)
 
 
-def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
-    if raw_signal.size < 4:
-        raise ValueError("La imagen recortada es demasiado chica para extraer un densitograma.")
-
-    signal = raw_signal.astype(np.float64)
-    dynamic_range = float(np.percentile(signal, 98) - np.percentile(signal, 2))
-    if dynamic_range < MIN_SIGNAL_DYNAMIC_RANGE:
-        raise ValueError("La imagen no contiene suficiente contraste para extraer una senal util.")
-
-    window = max(calibration.baseline_window_min, signal.size // calibration.baseline_window_divisor)
-    if window % 2 == 0:
-        window += 1
-    rolling_min = minimum_filter1d(signal, size=window, mode="nearest")
-    baseline = gaussian_filter1d(rolling_min, sigma=window / 2.0, mode="nearest")
-    corrected = np.clip(signal - baseline, 0.0, None)
+def finalize_normalized_signal(corrected: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
     sigma = max(calibration.smoothing_sigma_min, corrected.size / calibration.smoothing_sigma_divisor)
     smooth = gaussian_filter1d(corrected, sigma=sigma, mode="nearest")
-    smooth = np.clip(smooth - float(np.percentile(smooth, 2)), 0.0, None)
+    smooth = np.clip(smooth - float(np.percentile(smooth, RESIDUAL_BASELINE_PERCENTILE)), 0.0, None)
 
     if calibration.signal_floor > 0:
         smooth = np.clip(smooth - calibration.signal_floor * float(smooth.max(initial=0.0)), 0.0, None)
@@ -124,6 +114,57 @@ def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) 
     normalized[0] = 0.0
     normalized[-1] = 0.0
     return normalized
+
+
+def normalize_with_global_baseline(signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
+    baseline = float(np.percentile(signal, GLOBAL_BASELINE_PERCENTILE))
+    corrected = np.clip(signal - baseline, 0.0, None)
+    return finalize_normalized_signal(corrected, calibration)
+
+
+def normalize_with_local_baseline(signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
+    window = max(calibration.baseline_window_min, signal.size // calibration.baseline_window_divisor)
+    if window % 2 == 0:
+        window += 1
+
+    rolling_min = minimum_filter1d(signal, size=window, mode="nearest")
+    baseline = gaussian_filter1d(rolling_min, sigma=window / 2.0, mode="nearest")
+    corrected = np.clip(signal - baseline, 0.0, None)
+    return finalize_normalized_signal(corrected, calibration)
+
+
+def local_baseline_preserves_shape(raw_signal: np.ndarray, normalized: np.ndarray) -> bool:
+    max_index = max(raw_signal.size - 1, 1)
+    raw_peak_index = int(np.argmax(raw_signal))
+    normalized_peak_index = int(np.argmax(normalized))
+    max_peak_shift = max(3, int(round(max_index * LOCAL_BASELINE_MAX_PEAK_SHIFT_RATIO)))
+
+    if abs(raw_peak_index - normalized_peak_index) > max_peak_shift:
+        return False
+
+    if float(np.std(raw_signal)) <= 0.0 or float(np.std(normalized)) <= 0.0:
+        return False
+
+    correlation = float(np.corrcoef(raw_signal, normalized)[0, 1])
+    return np.isfinite(correlation) and correlation >= LOCAL_BASELINE_MIN_CORRELATION
+
+
+def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
+    if raw_signal.size < 4:
+        raise ValueError("La imagen recortada es demasiado chica para extraer un densitograma.")
+
+    signal = raw_signal.astype(np.float64)
+    dynamic_range = float(np.percentile(signal, 98) - np.percentile(signal, 2))
+    if dynamic_range < MIN_SIGNAL_DYNAMIC_RANGE:
+        raise ValueError("La imagen no contiene suficiente contraste para extraer una senal util.")
+
+    global_normalized = normalize_with_global_baseline(signal, calibration)
+    local_normalized = normalize_with_local_baseline(signal, calibration)
+
+    if local_baseline_preserves_shape(signal, local_normalized):
+        return local_normalized
+
+    return global_normalized
 
 
 def detect_peaks(signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
@@ -227,7 +268,15 @@ def apply_calibrated_boundary_rules(signal: np.ndarray, boundaries: list[int]) -
     return calibrated
 
 
-def build_boundaries(signal: np.ndarray) -> list[int]:
+def calibrated_boundary_offsets(calibration: ProcessorCalibration) -> tuple[float, ...]:
+    if calibration.valley_offsets and len(calibration.valley_offsets) == len(BOUNDARY_WINDOWS):
+        return calibration.valley_offsets
+    return CALIBRATED_BOUNDARY_OFFSETS
+
+
+def build_boundaries(signal: np.ndarray, calibration: ProcessorCalibration | None = None) -> list[int]:
+    active_calibration = calibration or get_calibration()
+    boundary_offsets = calibrated_boundary_offsets(active_calibration)
     max_index = max(signal.size - 1, 0)
     min_gap = max(2, signal.size // 160)
     boundaries = [0]
@@ -244,7 +293,7 @@ def build_boundaries(signal: np.ndarray) -> list[int]:
         upper = min(max_index - remaining_boundaries * min_gap, max_index - future_min_width)
         upper = max(lower, upper)
         boundary = find_local_valley(signal, window[0], window[1], lower, upper)
-        offset = CALIBRATED_BOUNDARY_OFFSETS[boundary_index]
+        offset = boundary_offsets[boundary_index]
         boundary = clamp(boundary + int(round(offset * max_index)), lower, upper)
         boundaries.append(boundary)
 
@@ -301,7 +350,7 @@ def build_warnings(
     boundaries: list[int],
 ) -> list[str]:
     warnings: list[str] = []
-    warnings.append("Motor v3.3 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+    warnings.append("Motor v3.5 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
 
     if crop.width < calibration.crop_warning_min_width or crop.height < calibration.crop_warning_min_height:
         warnings.append("El recorte es pequeno y puede degradar la estimacion.")
@@ -338,7 +387,7 @@ def process_electrophoresis_image(
     signal = normalize_signal(raw_signal, active_calibration)
 
     detected_peaks = detect_peaks(signal, active_calibration)
-    boundaries = build_boundaries(signal)
+    boundaries = build_boundaries(signal, active_calibration)
     fractions = build_fractions(signal, boundaries, total_concentration)
     peaks = [fractions[key].peak_index for key in FRACTION_KEYS]
     valleys = boundaries[1:-1]
