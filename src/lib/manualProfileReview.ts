@@ -47,6 +47,41 @@ function roundTo(value: number, digits: number) {
   return Math.round(value * factor) / factor
 }
 
+function readAnalysisValues(result: LocalProcessorResult) {
+  const values = Array.isArray(result.profile_signal)
+    ? result.profile_signal.filter((value): value is number => Number.isFinite(value))
+    : []
+
+  if (values.length > 1) return values
+  return result.profile.map(point => point.y)
+}
+
+function readAnalysisSampleCount(result: LocalProcessorResult) {
+  return Math.max(1, readAnalysisValues(result).length)
+}
+
+function interpolateProfileY(profile: LocalProcessorResult['profile'], ratio: number) {
+  if (profile.length === 0) return 0
+  const safeRatio = clamp(ratio, 0, 1)
+  const first = profile[0]
+  const last = profile[profile.length - 1]
+  if (safeRatio <= first.x) return first.y
+  if (safeRatio >= last.x) return last.y
+
+  for (let index = 1; index < profile.length; index += 1) {
+    const previous = profile[index - 1]
+    const current = profile[index]
+    if (safeRatio > current.x) continue
+
+    const span = current.x - previous.x
+    if (span <= 0) return current.y
+    const localRatio = (safeRatio - previous.x) / span
+    return previous.y + ((current.y - previous.y) * localRatio)
+  }
+
+  return last.y
+}
+
 function trapezoidArea(values: number[], start: number, end: number) {
   if (end <= start) return 0
 
@@ -175,14 +210,14 @@ export function ratiosToIndices(ratios: number[], sampleCount: number) {
 }
 
 export function buildDefaultSeparatorRatios(result: LocalProcessorResult) {
-  const sampleCount = Math.max(1, result.profile.length)
-  const originalMax = Math.max(1, result.profile_length - 1)
+  const sampleCount = readAnalysisSampleCount(result)
+  const originalMax = Math.max(1, sampleCount - 1)
   const internalRatios = result.valleys.map(valley => clamp(valley / originalMax, 0, 1))
   return normalizeSeparatorRatios([0, ...internalRatios, 1], sampleCount)
 }
 
 export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targets: ReferenceFractionTargets) {
-  const values = result.profile.map(point => point.y)
+  const values = readAnalysisValues(result)
   const sampleCount = values.length
   const maxIndex = Math.max(0, sampleCount - 1)
   if (maxIndex === 0) return normalizeSeparatorRatios([], sampleCount)
@@ -254,7 +289,7 @@ export function snapSeparatorRatio(
   separatorIndex: number,
   targetRatio: number,
 ) {
-  const values = result.profile.map(point => point.y)
+  const values = readAnalysisValues(result)
   const sampleCount = values.length
   const maxIndex = Math.max(0, sampleCount - 1)
   if (sampleCount === 0) return ratios
@@ -286,21 +321,21 @@ export function buildManualReviewData(
   ratios: number[],
   totalConcentration: number | null,
 ): ManualReviewData {
-  const sampleCount = Math.max(1, result.profile.length)
-  const values = result.profile.map(point => point.y)
+  const values = readAnalysisValues(result)
+  const sampleCount = Math.max(1, values.length)
   const separatorRatios = normalizeSeparatorRatios(ratios, sampleCount)
   const separatorIndices = ratiosToIndices(separatorRatios, sampleCount)
   const totalArea = Math.max(trapezoidArea(values, separatorIndices[0], separatorIndices[separatorIndices.length - 1]), 0)
   const safeTotalArea = totalArea > 0 ? totalArea : 1
 
   const separators = REVIEW_SEPARATOR_DEFS.map((definition, index) => {
-    const point = result.profile[separatorIndices[index]] ?? result.profile[result.profile.length - 1] ?? { x: 0, y: 0 }
+    const ratio = separatorRatios[index]
     return {
       ...definition,
-      ratio: separatorRatios[index],
+      ratio,
       index: separatorIndices[index],
-      x: point.x,
-      y: point.y,
+      x: ratio,
+      y: interpolateProfileY(result.profile, ratio),
     }
   })
 

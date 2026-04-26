@@ -9,41 +9,9 @@ from .calibration import ProcessorCalibration, get_calibration
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.5-guarded-baseline"
+ALGORITHM_VERSION = "fastapi-opencv-v3.6-calibrated-boundaries"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
-
-# v3 does not infer all limits from detected peaks. It searches for plausible valleys
-# in stable SPEP regions and fails soft with warnings when the curve is ambiguous.
-BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
-    (0.50, 0.60),  # Albumina / Alfa 1
-    (0.56, 0.66),  # Alfa 1 / Alfa 2
-    (0.66, 0.76),  # Alfa 2 / Beta 1
-    (0.73, 0.82),  # Beta 1 / Beta 2
-    (0.72, 0.87),  # Beta 2 / Gamma  — calibrado 5 muestras: promedio real 80.5%, ventana corregida
-)
-EARLY_PROFILE_BOUNDARY_WINDOWS: tuple[tuple[float, float], ...] = (
-    (0.28, 0.46),
-    (0.50, 0.61),
-    (0.58, 0.68),
-    (0.65, 0.75),
-    (0.72, 0.87),
-)
-EARLY_ALBUMIN_PEAK_RATIO = 0.24
-MIN_FRACTION_WIDTH_RATIOS = (0.24, 0.025, 0.055, 0.035, 0.035, 0.08)
-CALIBRATED_BOUNDARY_OFFSETS = (0.0, 0.005, 0.02, 0.0, 0.0)
-GAMMA_COLLAPSE_PERCENTAGE = 3.0
-GAMMA_COLLAPSE_BOUNDARY_MIN_RATIO = 0.84
-GAMMA_BETA2_TARGET_RATIO = 0.795
-BETA1_BRIDGE_PERCENTAGE = 12.0
-BETA1_BRIDGE_BETA1_BETA2_TARGET_RATIO = 0.72
-BETA1_BRIDGE_GAMMA_BETA2_TARGET_RATIO = 0.755
-EARLY_ALFA1_INFLATED_PERCENTAGE = 10.0
-EARLY_ALFA1_ALBUMIN_MAX_PERCENTAGE = 50.0
-EARLY_ALFA1_BOUNDARY_MAX_RATIO = 0.53
-EARLY_ALFA1_ALBUMIN_ALFA1_TARGET_RATIO = 0.60
-EARLY_ALFA1_ALFA1_ALFA2_TARGET_RATIO = 0.64
-EARLY_ALFA1_ALFA2_BETA1_TARGET_RATIO = 0.72
 
 PROJECTION_TOP_FRACTION = 0.38
 MIN_SIGNAL_DYNAMIC_RANGE = 0.035
@@ -52,9 +20,22 @@ GLOBAL_BASELINE_PERCENTILE = 5.0
 RESIDUAL_BASELINE_PERCENTILE = 2.0
 LOCAL_BASELINE_MIN_CORRELATION = 0.90
 LOCAL_BASELINE_MAX_PEAK_SHIFT_RATIO = 0.065
+ALBUMIN_TARGET_POSITION_IN_WINDOW = 0.60
+BOUNDARY_SHIFT_LIMIT_RATIO = 0.08
+GAUSSIAN_WIDTH_MIN_RATIO = 0.026
+GAUSSIAN_WIDTH_SCALES = (0.7, 1.0, 1.35)
+GAUSSIAN_FIT_ITERATIONS = 1200
+GAUSSIAN_FIT_EPSILON = 1e-9
+REFERENCE_VALLEY_SNAP_WINDOW_RATIO = 0.04
+REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP = 1.25
+REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP = 1.5
 
 
 def clamp(value: int, minimum: int, maximum: int) -> int:
+    return min(max(value, minimum), maximum)
+
+
+def clamp_ratio(value: float, minimum: float, maximum: float) -> float:
     return min(max(value, minimum), maximum)
 
 
@@ -179,25 +160,88 @@ def find_peak_index(signal: np.ndarray, start: int, end: int) -> int:
     return safe_start + int(np.argmax(signal[safe_start : safe_end + 1]))
 
 
-def find_local_valley(signal: np.ndarray, start_ratio: float, end_ratio: float, lower: int, upper: int) -> int:
-    max_index = max(signal.size - 1, 0)
-    start = max(lower, clamp(int(round(start_ratio * max_index)), 0, max_index))
-    end = min(upper, clamp(int(round(end_ratio * max_index)), start, max_index))
+def trapz_area(signal: np.ndarray, start: int, end: int) -> float:
     if end <= start:
-        return clamp(start, lower, upper)
+        return 0.0
+    return float(np.trapezoid(signal[start : end + 1]))
 
-    best_index = start
+
+def min_gap_for(sample_count: int) -> int:
+    base_gap = 4 if sample_count >= 180 else 3 if sample_count >= 90 else 2
+    max_index = max(0, sample_count - 1)
+    feasible_gap = max(1, max_index // max(1, len(FRACTION_KEYS)))
+    return min(base_gap, feasible_gap)
+
+
+def normalize_boundary_indices(indices: list[int], sample_count: int) -> list[int]:
+    max_index = max(0, sample_count - 1)
+    if max_index == 0:
+        return [0 for _ in range(len(FRACTION_KEYS) + 1)]
+
+    min_gap = min_gap_for(sample_count)
+    normalized = list(indices)
+    normalized[0] = 0
+    normalized[-1] = max_index
+
+    for index in range(len(normalized)):
+        min_allowed = 0 if index == 0 else normalized[index - 1] + min_gap
+        max_allowed = max_index - ((len(normalized) - 1 - index) * min_gap)
+        normalized[index] = clamp(normalized[index], min_allowed, max_allowed)
+
+    for index in range(len(normalized) - 2, -1, -1):
+        max_allowed = normalized[index + 1] - min_gap
+        min_allowed = 0 if index == 0 else normalized[index - 1] + min_gap
+        normalized[index] = clamp(normalized[index], min_allowed, max_allowed)
+
+    normalized[0] = 0
+    normalized[-1] = max_index
+    return normalized
+
+
+def build_area_percentages(signal: np.ndarray, boundaries: list[int]) -> list[float]:
+    total_area = trapz_area(signal, boundaries[0], boundaries[-1])
+    safe_total_area = total_area if total_area > 0 else 1.0
+    return [
+        (trapz_area(signal, boundaries[index], boundaries[index + 1]) / safe_total_area) * 100.0
+        for index in range(len(FRACTION_KEYS))
+    ]
+
+
+def measure_target_error(signal: np.ndarray, boundaries: list[int], target_percentages: list[float]) -> tuple[float, float]:
+    percentages = build_area_percentages(signal, boundaries)
+    errors = [abs(percentage - target) for percentage, target in zip(percentages, target_percentages)]
+    return float(sum(errors)), float(max(errors, default=0.0))
+
+
+def find_nearest_reference_valley(values: np.ndarray, target_index: int, min_allowed: int, max_allowed: int) -> int:
+    max_index = max(0, values.size - 1)
+    safe_min = clamp(min_allowed, 0, max_index)
+    safe_max = clamp(max_allowed, safe_min, max_index)
+    safe_target = clamp(target_index, safe_min, safe_max)
+    radius = max(2, int(round(max_index * REFERENCE_VALLEY_SNAP_WINDOW_RATIO)))
+    start = max(safe_min, safe_target - radius)
+    end = min(safe_max, safe_target + radius)
+
+    best_index = safe_target
     best_score = float("inf")
-    midpoint = (start + end) / 2.0
-    half_width = max((end - start) / 2.0, 1.0)
+    found_local_minimum = False
 
     for index in range(start, end + 1):
-        previous_value = float(signal[index - 1]) if index > 0 else float(signal[index])
-        current_value = float(signal[index])
-        next_value = float(signal[index + 1]) if index < max_index else float(signal[index])
-        local_shape_penalty = 0.0 if current_value <= previous_value and current_value <= next_value else 0.02
-        center_penalty = abs(index - midpoint) / half_width * 0.01
-        score = current_value + local_shape_penalty + center_penalty
+        previous = float(values[index - 1]) if index > 0 else float(values[index])
+        current = float(values[index])
+        next_value = float(values[index + 1]) if index < max_index else float(values[index])
+        is_local_minimum = current <= previous and current <= next_value
+
+        if not is_local_minimum and found_local_minimum:
+            continue
+
+        distance_penalty = abs(index - safe_target) / max(radius, 1) * 0.025
+        score = current + distance_penalty
+
+        if is_local_minimum and not found_local_minimum:
+            found_local_minimum = True
+            best_score = float("inf")
+
         if score < best_score:
             best_score = score
             best_index = index
@@ -205,106 +249,115 @@ def find_local_valley(signal: np.ndarray, start_ratio: float, end_ratio: float, 
     return best_index
 
 
-def boundary_ratio(boundaries: list[int], boundary_index: int, max_index: int) -> float:
-    return boundaries[boundary_index] / max(max_index, 1)
-
-
-def fraction_percentages(signal: np.ndarray, boundaries: list[int]) -> list[float]:
-    total_area = trapz_area(signal, boundaries[0], boundaries[-1])
-    if total_area <= 0:
-        return [0.0 for _ in FRACTION_KEYS]
-
-    return [
-        (trapz_area(signal, boundaries[index], boundaries[index + 1]) / total_area) * 100.0
-        for index in range(len(FRACTION_KEYS))
-    ]
-
-
-def set_boundary_ratio(boundaries: list[int], boundary_index: int, target_ratio: float, max_index: int) -> None:
-    target = int(round(target_ratio * max_index))
-    previous_boundary = boundaries[boundary_index - 1]
-    next_boundary = boundaries[boundary_index + 1]
-    left_min_width = int(round(MIN_FRACTION_WIDTH_RATIOS[boundary_index - 1] * max_index))
-    right_min_width = int(round(MIN_FRACTION_WIDTH_RATIOS[boundary_index] * max_index))
-    lower = previous_boundary + max(left_min_width, 1)
-    upper = next_boundary - max(right_min_width, 1)
-
-    if upper < lower:
-        lower = previous_boundary + 1
-        upper = max(lower, next_boundary - 1)
-
-    boundaries[boundary_index] = clamp(target, lower, upper)
-
-
-def apply_calibrated_boundary_rules(signal: np.ndarray, boundaries: list[int]) -> list[int]:
+def estimate_profile_shift_ratio(signal: np.ndarray, calibration: ProcessorCalibration) -> float:
     max_index = max(signal.size - 1, 1)
-    calibrated = boundaries.copy()
-    percentages = fraction_percentages(signal, calibrated)
-    albumin_percentage = percentages[0]
-    alfa1_percentage = percentages[1]
-
-    if (
-        alfa1_percentage >= EARLY_ALFA1_INFLATED_PERCENTAGE
-        and albumin_percentage <= EARLY_ALFA1_ALBUMIN_MAX_PERCENTAGE
-        and boundary_ratio(calibrated, 1, max_index) <= EARLY_ALFA1_BOUNDARY_MAX_RATIO
-    ):
-        set_boundary_ratio(calibrated, 3, EARLY_ALFA1_ALFA2_BETA1_TARGET_RATIO, max_index)
-        set_boundary_ratio(calibrated, 2, EARLY_ALFA1_ALFA1_ALFA2_TARGET_RATIO, max_index)
-        set_boundary_ratio(calibrated, 1, EARLY_ALFA1_ALBUMIN_ALFA1_TARGET_RATIO, max_index)
-
-    percentages = fraction_percentages(signal, calibrated)
-    beta1_percentage = percentages[3]
-    gamma_percentage = percentages[5]
-    beta_gamma_boundary_ratio = boundary_ratio(calibrated, 5, max_index)
-
-    if gamma_percentage <= GAMMA_COLLAPSE_PERCENTAGE and beta_gamma_boundary_ratio >= GAMMA_COLLAPSE_BOUNDARY_MIN_RATIO:
-        if beta1_percentage >= BETA1_BRIDGE_PERCENTAGE:
-            set_boundary_ratio(calibrated, 4, BETA1_BRIDGE_BETA1_BETA2_TARGET_RATIO, max_index)
-            set_boundary_ratio(calibrated, 5, BETA1_BRIDGE_GAMMA_BETA2_TARGET_RATIO, max_index)
-        else:
-            set_boundary_ratio(calibrated, 4, min(boundary_ratio(calibrated, 4, max_index), GAMMA_BETA2_TARGET_RATIO - 0.04), max_index)
-            set_boundary_ratio(calibrated, 5, GAMMA_BETA2_TARGET_RATIO, max_index)
-
-    return calibrated
+    albumin_window = calibration.fraction_windows[0]
+    search_end_ratio = calibration.fraction_windows[min(1, len(calibration.fraction_windows) - 1)].end
+    observed_peak = find_peak_index(signal, 0, int(round(search_end_ratio * max_index)))
+    observed_peak_ratio = observed_peak / max_index
+    expected_peak_ratio = albumin_window.start + ((albumin_window.end - albumin_window.start) * ALBUMIN_TARGET_POSITION_IN_WINDOW)
+    return clamp_ratio(observed_peak_ratio - expected_peak_ratio, -BOUNDARY_SHIFT_LIMIT_RATIO, BOUNDARY_SHIFT_LIMIT_RATIO)
 
 
-def calibrated_boundary_offsets(calibration: ProcessorCalibration) -> tuple[float, ...]:
-    if calibration.valley_offsets and len(calibration.valley_offsets) == len(BOUNDARY_WINDOWS):
-        return calibration.valley_offsets
-    return CALIBRATED_BOUNDARY_OFFSETS
+def fit_fraction_target_percentages(signal: np.ndarray, calibration: ProcessorCalibration) -> list[float]:
+    x_axis = np.linspace(0.0, 1.0, signal.size)
+    profile_shift_ratio = estimate_profile_shift_ratio(signal, calibration)
+    basis_columns: list[np.ndarray] = []
+    basis_owners: list[int] = []
+    basis_areas: list[float] = []
+
+    for fraction_index, window in enumerate(calibration.fraction_windows):
+        center = clamp_ratio(((window.start + window.end) / 2.0) + profile_shift_ratio, 0.0, 1.0)
+        base_width = max((window.end - window.start) / 3.2, GAUSSIAN_WIDTH_MIN_RATIO)
+
+        for scale in GAUSSIAN_WIDTH_SCALES:
+            sigma = max(base_width * scale, GAUSSIAN_WIDTH_MIN_RATIO * 0.6)
+            basis = np.exp(-0.5 * np.square((x_axis - center) / sigma))
+            basis_columns.append(basis)
+            basis_owners.append(fraction_index)
+            basis_areas.append(float(np.trapezoid(basis, x_axis)))
+
+    if not basis_columns:
+        equal_share = 100.0 / len(FRACTION_KEYS)
+        return [equal_share for _ in FRACTION_KEYS]
+
+    basis_matrix = np.stack(basis_columns, axis=1)
+    weights = np.full(basis_matrix.shape[1], 0.1, dtype=np.float64)
+
+    for _ in range(GAUSSIAN_FIT_ITERATIONS):
+        numerator = basis_matrix.T @ signal
+        denominator = basis_matrix.T @ (basis_matrix @ weights) + GAUSSIAN_FIT_EPSILON
+        weights *= numerator / denominator
+
+    fraction_areas = np.zeros(len(FRACTION_KEYS), dtype=np.float64)
+    for weight, owner, area in zip(weights, basis_owners, basis_areas):
+        fraction_areas[owner] += weight * area
+
+    total_area = float(fraction_areas.sum())
+    if total_area <= 0:
+        equal_share = 100.0 / len(FRACTION_KEYS)
+        return [equal_share for _ in FRACTION_KEYS]
+
+    return [float((area / total_area) * 100.0) for area in fraction_areas]
 
 
 def build_boundaries(signal: np.ndarray, calibration: ProcessorCalibration | None = None) -> list[int]:
     active_calibration = calibration or get_calibration()
-    boundary_offsets = calibrated_boundary_offsets(active_calibration)
-    max_index = max(signal.size - 1, 0)
-    min_gap = max(2, signal.size // 160)
+    target_percentages = fit_fraction_target_percentages(signal, active_calibration)
+    sample_count = signal.size
+    max_index = max(0, sample_count - 1)
+    total_area = trapz_area(signal, 0, max_index)
+
+    if total_area <= 0:
+        even_boundaries = [int(round(index * max_index / len(FRACTION_KEYS))) for index in range(len(FRACTION_KEYS) + 1)]
+        return normalize_boundary_indices(even_boundaries, sample_count)
+
     boundaries = [0]
-    albumin_peak = find_peak_index(signal, 0, int(round(0.40 * max_index)))
-    albumin_peak_ratio = albumin_peak / max(max_index, 1)
+    accumulated_target = 0.0
+    running_area = 0.0
+    cursor = 0
 
-    active_windows = EARLY_PROFILE_BOUNDARY_WINDOWS if albumin_peak_ratio < EARLY_ALBUMIN_PEAK_RATIO else BOUNDARY_WINDOWS
+    for target_percentage in target_percentages[:-1]:
+        accumulated_target += max(0.0, target_percentage) / 100.0
+        target_area = accumulated_target * total_area
+        boundary_index = max_index
 
-    for boundary_index, window in enumerate(active_windows):
-        remaining_boundaries = len(BOUNDARY_WINDOWS) - boundary_index
-        current_min_width = int(round(MIN_FRACTION_WIDTH_RATIOS[boundary_index] * max_index))
-        future_min_width = int(round(sum(MIN_FRACTION_WIDTH_RATIOS[boundary_index + 1 :]) * max_index))
-        lower = max(boundaries[-1] + min_gap, boundaries[-1] + current_min_width)
-        upper = min(max_index - remaining_boundaries * min_gap, max_index - future_min_width)
-        upper = max(lower, upper)
-        boundary = find_local_valley(signal, window[0], window[1], lower, upper)
-        offset = boundary_offsets[boundary_index]
-        boundary = clamp(boundary + int(round(offset * max_index)), lower, upper)
-        boundaries.append(boundary)
+        while cursor < max_index:
+            segment_area = (float(signal[cursor]) + float(signal[cursor + 1])) / 2.0
+            next_area = running_area + segment_area
+            if next_area >= target_area:
+                fraction_within_segment = 0.0 if segment_area <= 0 else (target_area - running_area) / segment_area
+                boundary_index = clamp(cursor + int(round(clamp_ratio(fraction_within_segment, 0.0, 1.0))), 0, max_index)
+                break
+            running_area = next_area
+            cursor += 1
+
+        boundaries.append(boundary_index)
 
     boundaries.append(max_index)
-    return apply_calibrated_boundary_rules(signal, boundaries)
 
+    area_only = normalize_boundary_indices(boundaries, sample_count)
+    snapped = area_only.copy()
+    min_gap = min_gap_for(sample_count)
 
-def trapz_area(signal: np.ndarray, start: int, end: int) -> float:
-    if end <= start:
-        return 0.0
-    return float(np.trapezoid(signal[start : end + 1]))
+    for index in range(1, len(snapped) - 1):
+        snapped[index] = find_nearest_reference_valley(
+            signal,
+            snapped[index],
+            snapped[index - 1] + min_gap,
+            snapped[index + 1] - min_gap,
+        )
+
+    area_only_total_error, _ = measure_target_error(signal, area_only, target_percentages)
+    snapped_total_error, snapped_max_error = measure_target_error(signal, snapped, target_percentages)
+
+    if (
+        snapped_max_error > REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP
+        or snapped_total_error > area_only_total_error + REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP
+    ):
+        return area_only
+
+    return normalize_boundary_indices(snapped, sample_count)
 
 
 def downsample(signal: np.ndarray, max_points: int) -> list[ProfilePoint]:
@@ -350,7 +403,7 @@ def build_warnings(
     boundaries: list[int],
 ) -> list[str]:
     warnings: list[str] = []
-    warnings.append("Motor v3.5 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+    warnings.append("Motor v3.6 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
 
     if crop.width < calibration.crop_warning_min_width or crop.height < calibration.crop_warning_min_height:
         warnings.append("El recorte es pequeno y puede degradar la estimacion.")
@@ -412,6 +465,7 @@ def process_electrophoresis_image(
         peaks=peaks,
         valleys=valleys,
         total_area=round(total_area, 4),
+        profile_signal=[round(float(value), 6) for value in signal],
         profile=downsample(signal, active_calibration.profile_downsample_points),
         fractions=fractions,
         warning=" ".join(warnings) if warnings else None,

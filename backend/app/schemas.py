@@ -52,6 +52,7 @@ class ProcessAnalysisResponse(BaseModel):
     peaks: list[int]
     valleys: list[int]
     total_area: float
+    profile_signal: list[float]
     profile: list[ProfilePoint]
     fractions: dict[FractionKey, FractionResult]
     warning: str | None = None

@@ -6,10 +6,14 @@ import { AlertCircle, ChevronRight, CropIcon, ImageIcon, ImageUp, ScanSearch, X 
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import { supabase } from '../lib/supabase'
+import { ANALYSIS_API_ENABLED } from '../lib/backendProcessor'
 import {
   buildResultadoCrudo,
+  DENSITOGRAM_FILE_ACCEPT,
   emptyCropSettings,
   normalizeCropSettings,
+  removeAnalisisImages,
+  resolveDensitogramFileSupport,
   type CropSettings,
   uploadAnalisisImage,
 } from '../lib/electroforesis'
@@ -198,17 +202,42 @@ export default function CargadeMuestra() {
   function addFiles(files: FileList | null) {
     if (!files) return
 
-    const baseIndex = images.length
-    const added: ImageFile[] = Array.from(files).map(file => ({
-      file,
-      preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
-      tipo: FIXED_IMAGE_TYPE,
-      crop: { ...emptyCropSettings },
-      dimensions: null,
-    }))
+    const nextFiles = Array.from(files)
+    const supportedFiles = nextFiles.flatMap(file => {
+      const support = resolveDensitogramFileSupport(file.name, file.type)
+      if (!support.accepted) return []
+      if (support.requiresBackend && !ANALYSIS_API_ENABLED) return []
 
-    setError('')
-    setImages(prev => [...prev, ...added])
+      return [{
+        file,
+        preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
+        tipo: FIXED_IMAGE_TYPE,
+        crop: { ...emptyCropSettings },
+        dimensions: null,
+      }]
+    })
+
+    const rejectedMessages = nextFiles.flatMap(file => {
+      const support = resolveDensitogramFileSupport(file.name, file.type)
+      if (!support.accepted) {
+        return [`${file.name}: ${support.reason ?? 'Formato no compatible.'}`]
+      }
+
+      if (support.requiresBackend && !ANALYSIS_API_ENABLED) {
+        return [`${file.name}: ${support.reason ?? 'Este formato requiere backend.'}`]
+      }
+
+      return []
+    })
+
+    if (supportedFiles.length === 0) {
+      setError(rejectedMessages.join(' '))
+      return
+    }
+
+    const baseIndex = images.length
+    setError(rejectedMessages.join(' '))
+    setImages(prev => [...prev, ...supportedFiles])
     setSelectedImageIndex(current => current ?? baseIndex)
   }
 
@@ -308,6 +337,7 @@ export default function CargadeMuestra() {
     setError('')
 
     let analisisId: string | null = null
+    const uploadedImages: Array<ImageFile & { storagePath: string }> = []
 
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -336,7 +366,6 @@ export default function CargadeMuestra() {
       const currentAnalisisId = analisis.id
       analisisId = currentAnalisisId
 
-      const uploadedImages: Array<ImageFile & { storagePath: string }> = []
       for (const image of images) {
         const storagePath = await uploadAnalisisImage(currentAnalisisId, image.file)
         uploadedImages.push({ ...image, storagePath })
@@ -393,27 +422,61 @@ export default function CargadeMuestra() {
         },
       })
     } catch (caughtError) {
+      let cleanupError = ''
+
       if (analisisId) {
+        const cleanupErrors: string[] = []
+        let storageCleanupFailed = false
+
+        if (uploadedImages.length > 0) {
+          const { error: deleteRowsError } = await supabase
+            .from('analisis_imagenes')
+            .delete()
+            .eq('analisis_id', analisisId)
+
+          if (deleteRowsError) {
+            cleanupErrors.push(`No se pudieron limpiar las filas de imagenes: ${deleteRowsError.message}`)
+          }
+
+          try {
+            await removeAnalisisImages(uploadedImages.map(image => image.storagePath))
+          } catch (storageCleanupError) {
+            storageCleanupFailed = true
+            cleanupErrors.push(
+              storageCleanupError instanceof Error
+                ? `No se pudieron limpiar los archivos cargados: ${storageCleanupError.message}`
+                : 'No se pudieron limpiar los archivos cargados.',
+            )
+          }
+        }
+
+        cleanupError = cleanupErrors.join(' ')
+        const persistUploadedPaths = storageCleanupFailed
+        const failedImages = persistUploadedPaths ? uploadedImages : images
+
         await supabase
           .from('analisis_electroforesis')
           .update({
+            archivo_densitograma_url: null,
             resultado_crudo: buildResultadoCrudo(
-              images.map(image => ({
+              failedImages.map(image => ({
                 nombre: image.file.name,
                 tipo: image.tipo,
                 crop: image.crop,
-                storagePath: image.storagePath,
+                storagePath: 'storagePath' in image ? image.storagePath : undefined,
               })),
               {
                 processor_status: 'failed',
                 last_step: 'sample_upload_failed',
+                cleanup_error: cleanupError || null,
               },
             ),
           })
           .eq('id', analisisId)
       }
 
-      setError(caughtError instanceof Error ? caughtError.message : 'No se pudo guardar la muestra.')
+      const baseMessage = caughtError instanceof Error ? caughtError.message : 'No se pudo guardar la muestra.'
+      setError(cleanupError ? `${baseMessage} ${cleanupError}` : baseMessage)
     } finally {
       setSaving(false)
     }
@@ -501,7 +564,7 @@ export default function CargadeMuestra() {
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/*,.pdf,.tiff"
+                accept={DENSITOGRAM_FILE_ACCEPT}
                 multiple
                 className="hidden"
                 onChange={event => addFiles(event.target.files)}

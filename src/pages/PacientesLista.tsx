@@ -82,18 +82,29 @@ export default function PacientesLista() {
   const [activeSection, setActiveSection] = useState('pacientes')
   const [pacientes, setPacientes] = useState<Paciente[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [analisisMap, setAnalisisMap] = useState<Record<string, Analisis[]>>({})
+  const [analisisErrorMap, setAnalisisErrorMap] = useState<Record<string, string>>({})
   const [loadingAnalisis, setLoadingAnalisis] = useState<string | null>(null)
 
   useEffect(() => {
     async function fetchPacientes() {
       setLoading(true)
-      const { data } = await supabase
+      setError('')
+      const { data, error: pacientesError } = await supabase
         .from('pacientes')
         .select('id, paciente_codigo, dni, nombre, apellido, fecha_nacimiento, sexo, obra_social, activo')
         .order('apellido', { ascending: true })
+
+      if (pacientesError) {
+        setPacientes([])
+        setError(`No se pudo cargar la lista de pacientes. ${pacientesError.message}`)
+        setLoading(false)
+        return
+      }
+
       setPacientes(data ?? [])
       setLoading(false)
     }
@@ -109,11 +120,19 @@ export default function PacientesLista() {
     if (analisisMap[id] !== undefined) return
 
     setLoadingAnalisis(id)
-    const { data } = await supabase
+    setAnalisisErrorMap(prev => ({ ...prev, [id]: '' }))
+    const { data, error: analisisError } = await supabase
       .from('analisis_electroforesis')
       .select('*')
       .eq('paciente_id', id)
       .order('fecha_hora_analisis', { ascending: false })
+
+    if (analisisError) {
+      setAnalisisErrorMap(prev => ({ ...prev, [id]: `No se pudieron cargar los analisis. ${analisisError.message}` }))
+      setLoadingAnalisis(null)
+      return
+    }
+
     setAnalisisMap(prev => ({ ...prev, [id]: data ?? [] }))
     setLoadingAnalisis(null)
   }
@@ -142,6 +161,12 @@ export default function PacientesLista() {
           <p className="text-sm mb-6" style={{ color: '#54585E' }}>
             Listado de pacientes registrados. Expandí cada fila para ver sus análisis.
           </p>
+
+          {error && (
+            <div className="mb-4 rounded-xl px-4 py-3 text-sm" style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#C0392B' }}>
+              {error}
+            </div>
+          )}
 
           {/* Buscador */}
           <div className="flex items-center gap-3 mb-5">
@@ -274,6 +299,8 @@ export default function PacientesLista() {
 
                               {loadingAnalisis === p.id ? (
                                 <p className="text-xs" style={{ color: '#54585E' }}>Cargando análisis...</p>
+                              ) : analisisErrorMap[p.id] ? (
+                                <p className="text-xs" style={{ color: '#C0392B' }}>{analisisErrorMap[p.id]}</p>
                               ) : analisisMap[p.id]?.length === 0 ? (
                                 <p className="text-xs" style={{ color: '#54585E' }}>Sin análisis registrados para este paciente.</p>
                               ) : (

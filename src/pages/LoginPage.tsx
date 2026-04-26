@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Mail, Lock, Eye, EyeOff, ShieldPlus } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -8,6 +8,10 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
+  const redirectTo = typeof location.state === 'object' && location.state != null && 'from' in location.state && typeof location.state.from === 'string'
+    ? location.state.from
+    : '/home'
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -27,7 +31,7 @@ export default function LoginPage() {
       return
     }
 
-    navigate('/home')
+    navigate(redirectTo, { replace: true })
   }
 
   return (

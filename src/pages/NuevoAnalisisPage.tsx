@@ -6,6 +6,7 @@ import { ANALYSIS_API_ENABLED, ANALYSIS_API_URL, processElectrophoresisWithBacke
 import {
   createCroppedAnalisisImagePreview,
   createSignedAnalisisImageUrl,
+  resolveDensitogramFileSupport,
   type CropPayload,
 } from '../lib/electroforesis'
 import { processElectrophoresisImage, type LocalProcessorResult } from '../lib/localProcessor'
@@ -418,7 +419,7 @@ function buildStoredReferenceCalibration(
   processorMeta: ProcessorMeta,
   selectedSeparatorIndex: number,
 ) {
-  const profileLength = Math.max(result.profile.length, result.profile_length, 1)
+  const profileLength = readAnalysisProfileLength(result)
 
   return {
     version: 'pdf_reference_calibration_v1',
@@ -461,7 +462,7 @@ function buildStoredReferenceCalibration(
     calibration_version: processorMeta.calibrationVersion || null,
     crop_used: result.crop_used,
     axis: result.axis,
-    profile_length: result.profile_length,
+    profile_length: profileLength,
     total_area: result.total_area,
     peaks: result.peaks,
     valleys: result.valleys,
@@ -503,7 +504,7 @@ function readStoredSeparatorRatios(rawResult: Record<string, unknown> | null, re
   if (isRecord(manualReview) && Array.isArray(manualReview.separator_ratios)) {
     const ratios = manualReview.separator_ratios.filter(isNumber)
     if (ratios.length === REVIEW_SEPARATOR_COUNT) {
-      return normalizeSeparatorRatios(ratios, result.profile.length)
+      return normalizeSeparatorRatios(ratios, readAnalysisProfileLength(result))
     }
   }
 
@@ -662,12 +663,29 @@ function normalizeIncomingImages(images: IncomingImageState[] | undefined): Imag
   })
 }
 
+async function refreshProcessingPreview(image: ImagePreview) {
+  if (!image.storagePath) {
+    return image.processingPreview
+  }
+
+  const renewedUrl = await createSignedAnalisisImageUrl(image.storagePath)
+  if (!renewedUrl) {
+    throw new Error('No se pudo renovar el acceso al densitograma guardado. Recarga el analisis e intenta de nuevo.')
+  }
+
+  return renewedUrl
+}
+
 const DENSITOGRAM_X_VISUAL_SCALE = 1
+
+function compactDensitogramRatio(x: number) {
+  return Math.min(Math.max(0.5 + (x - 0.5) * DENSITOGRAM_X_VISUAL_SCALE, 0), 1)
+}
 
 function compactDensitogramX(x: number, index: number, lastIndex: number) {
   if (index === 0) return 0
   if (index === lastIndex) return 1
-  return 0.5 + (x - 0.5) * DENSITOGRAM_X_VISUAL_SCALE
+  return compactDensitogramRatio(x)
 }
 
 function restoreDensitogramX(displayX: number) {
@@ -687,6 +705,71 @@ function buildDensitogramDisplayProfile(profile: LocalProcessorResult['profile']
     x: compactDensitogramX(point.x, index, lastIndex),
     y: buildDensitogramDisplayY(point.y, index, lastIndex),
   }))
+}
+
+function readAnalysisProfileLength(result: LocalProcessorResult) {
+  const signal = Array.isArray(result.profile_signal)
+    ? result.profile_signal.filter((value): value is number => Number.isFinite(value))
+    : []
+
+  if (signal.length > 1) return signal.length
+  return Math.max(result.profile_length, result.profile.length, 1)
+}
+
+function interpolateProfilePoint(profile: LocalProcessorResult['profile'], ratio: number) {
+  const safeRatio = Math.min(Math.max(ratio, 0), 1)
+  if (profile.length === 0) {
+    return { x: safeRatio, y: safeRatio <= 0 || safeRatio >= 1 ? 0 : 0 }
+  }
+
+  const first = profile[0]
+  const last = profile[profile.length - 1]
+  if (safeRatio <= first.x) {
+    return { x: safeRatio, y: safeRatio <= 0 ? 0 : first.y }
+  }
+  if (safeRatio >= last.x) {
+    return { x: safeRatio, y: safeRatio >= 1 ? 0 : last.y }
+  }
+
+  for (let index = 1; index < profile.length; index += 1) {
+    const previous = profile[index - 1]
+    const current = profile[index]
+    if (safeRatio > current.x) continue
+
+    const span = current.x - previous.x
+    if (span <= 0) {
+      return { x: safeRatio, y: current.y }
+    }
+
+    const localRatio = (safeRatio - previous.x) / span
+    return {
+      x: safeRatio,
+      y: previous.y + ((current.y - previous.y) * localRatio),
+    }
+  }
+
+  return { x: safeRatio, y: safeRatio >= 1 ? 0 : last.y }
+}
+
+function buildDensitogramDisplaySegment(profile: LocalProcessorResult['profile'], startRatio: number, endRatio: number) {
+  const safeStart = Math.min(Math.max(Math.min(startRatio, endRatio), 0), 1)
+  const safeEnd = Math.min(Math.max(Math.max(startRatio, endRatio), 0), 1)
+  const rawPoints = [
+    interpolateProfilePoint(profile, safeStart),
+    ...profile.filter(point => point.x > safeStart && point.x < safeEnd),
+    interpolateProfilePoint(profile, safeEnd),
+  ]
+
+  return rawPoints.map(point => ({
+    x: point.x <= 0 ? 0 : point.x >= 1 ? 1 : compactDensitogramRatio(point.x),
+    y: point.x <= 0 || point.x >= 1 ? 0 : buildDensitogramDisplayY(point.y, 1, 2),
+  }))
+}
+
+function buildSeparatorDisplayX(separatorRatio: number, separatorIndex: number, separatorCount: number) {
+  if (separatorIndex === 0) return 0
+  if (separatorIndex === separatorCount - 1) return 1
+  return compactDensitogramRatio(separatorRatio)
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
@@ -717,6 +800,7 @@ function ProfileChart({
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null)
   const [draggingSeparatorIndex, setDraggingSeparatorIndex] = useState<number | null>(null)
+  const analysisSampleCount = readAnalysisProfileLength(result)
 
   const chartWidth = 1000
   const chartHeight = 312
@@ -728,7 +812,7 @@ function ProfileChart({
   const xAxisLabelY = plotBottom + 18
   const yAxisLabelX = plotLeft - 12
   const selectedSeparator = review.separators[selectedSeparatorIndex] ?? review.separators[0]
-  const pointStep = 1 / Math.max(result.profile.length - 1, 1)
+  const pointStep = 1 / Math.max(analysisSampleCount - 1, 1)
   const majorStep = pointStep * 6
   const defaultRatios = buildDefaultSeparatorRatios(result)
   const hasManualAdjustments = review.separatorRatios.some((ratio, index) => (
@@ -831,11 +915,14 @@ function ProfileChart({
         })}
 
         {fracciones.map((fraccion, index) => {
-          const fraction = review.fractions[fraccion.key]
           const segmentColor = REVIEW_SEPARATOR_DEFS[index]?.color ?? '#94BB66'
-          const startPoint = displayProfile[fraction.start]
-          const endPoint = displayProfile[fraction.end]
-          const segmentPoints = displayProfile.slice(fraction.start, fraction.end + 1)
+          const segmentPoints = buildDensitogramDisplaySegment(
+            result.profile,
+            review.separatorRatios[index] ?? 0,
+            review.separatorRatios[index + 1] ?? 1,
+          )
+          const startPoint = segmentPoints[0]
+          const endPoint = segmentPoints[segmentPoints.length - 1]
 
           if (!startPoint || !endPoint || segmentPoints.length === 0) return null
 
@@ -876,7 +963,7 @@ function ProfileChart({
         <polyline fill="none" stroke="#161616" strokeWidth="1" strokeLinejoin="round" strokeLinecap="round" points={points} />
 
         {review.separators.map((separator, index) => {
-          const displayX = displayProfile[separator.index]?.x ?? compactDensitogramX(separator.x, separator.index, result.profile.length - 1)
+          const displayX = buildSeparatorDisplayX(separator.x, index, review.separators.length)
           const x = plotLeft + displayX * plotWidth
           const isSelected = index === selectedSeparatorIndex
           const isLocked = index === 0 || index === review.separators.length - 1
@@ -954,7 +1041,7 @@ function ProfileChart({
                   <p className="hidden mt-1 text-[11px]" style={{ color: '#6B7178' }}>
                     X {(separator.x * 100).toFixed(1)}% | Y {separator.y.toFixed(3)}
                   </p>
-                  <p className="hiddenmt-1 text-[10px] font-medium" style={{ color: index === 0 || index === review.separators.length - 1 ? '#A06A00' : '#5C894A' }}>
+                  <p className="hidden mt-1 text-[10px] font-medium" style={{ color: index === 0 || index === review.separators.length - 1 ? '#A06A00' : '#5C894A' }}>
                     {index === 0 || index === review.separators.length - 1 ? 'Linea fija' : 'Minimo editable'}
                   </p>
                 </button>
@@ -1137,11 +1224,14 @@ function PrintableProfileChart({
         })}
 
         {fracciones.map((fraccion, index) => {
-          const fraction = review.fractions[fraccion.key]
           const segmentColor = REVIEW_SEPARATOR_DEFS[index]?.color ?? '#94BB66'
-          const startPoint = displayProfile[fraction.start]
-          const endPoint = displayProfile[fraction.end]
-          const segmentPoints = displayProfile.slice(fraction.start, fraction.end + 1)
+          const segmentPoints = buildDensitogramDisplaySegment(
+            result.profile,
+            review.separatorRatios[index] ?? 0,
+            review.separatorRatios[index + 1] ?? 1,
+          )
+          const startPoint = segmentPoints[0]
+          const endPoint = segmentPoints[segmentPoints.length - 1]
 
           if (!startPoint || !endPoint || segmentPoints.length === 0) return null
 
@@ -1180,7 +1270,7 @@ function PrintableProfileChart({
         <polyline fill="none" stroke="#292929" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" points={points} />
 
         {review.separators.map((separator, index) => {
-          const displayX = displayProfile[separator.index]?.x ?? compactDensitogramX(separator.x, separator.index, result.profile.length - 1)
+          const displayX = buildSeparatorDisplayX(separator.x, index, review.separators.length)
           const x = plotLeft + displayX * plotWidth
           const isLocked = index === 0 || index === review.separators.length - 1
           const displayY = isLocked ? 0 : separator.y
@@ -1482,8 +1572,23 @@ export default function NuevoAnalisisPage() {
 
   async function handleProcess() {
     if (!analisisId) { setError('Primero debe existir un analisis persistido para procesar.'); return }
-    const sourceImage = images.find(image => image.tipo === 'densitograma') ?? images[0]
-    if (!sourceImage?.processingPreview) { setError('No hay una imagen disponible para procesar.'); return }
+    const sourceImage = images.find(image => image.tipo === 'densitograma') ?? images[0] ?? null
+    if (!sourceImage) { setError('No hay una imagen disponible para procesar.'); return }
+    if (!sourceImage.processingPreview && !sourceImage.storagePath) { setError('No hay una imagen disponible para procesar.'); return }
+
+    const formatSupport = resolveDensitogramFileSupport(sourceImage.nombre)
+    if (!formatSupport.accepted) {
+      setError(formatSupport.reason ?? 'El archivo seleccionado no se puede procesar como densitograma.')
+      return
+    }
+    if (formatSupport.requiresBackend && !ANALYSIS_API_ENABLED) {
+      setError(`El archivo ${sourceImage.nombre} requiere el backend FastAPI habilitado para procesarse.`)
+      return
+    }
+    if (formatSupport.requiresBackend && processorMode === 'local') {
+      setError(`El archivo ${sourceImage.nombre} requiere backend FastAPI. Cambia el modo de procesamiento a automatico.`)
+      return
+    }
 
     setProcessing(true)
     setError('')
@@ -1493,10 +1598,23 @@ export default function NuevoAnalisisPage() {
       const storedImages = readStoredInputImages(rawResult)
       const crop = findCropForImage(sourceImage, storedImages)
       const safeTotalConcentration = parseTotalConcentration(concTotal)
+      const processingPreview = await refreshProcessingPreview(sourceImage)
       const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto'
 
+      if (processingPreview !== sourceImage.processingPreview) {
+        setImages(current => current.map(image => (
+          image.storagePath === sourceImage.storagePath && image.nombre === sourceImage.nombre
+            ? {
+                ...image,
+                processingPreview,
+                preview: image.preview === image.processingPreview ? processingPreview : image.preview,
+              }
+            : image
+        )))
+      }
+
       let result: LocalProcessorResult
-      let algorithmVersion = 'local-calibrated-v3.5'
+      let algorithmVersion = 'local-calibrated-v3.6'
       let processorSource: ProcessorSource = 'frontend_local_fallback'
       let backendFallbackDetail = ''
       let calibrationProfile = ''
@@ -1505,20 +1623,25 @@ export default function NuevoAnalisisPage() {
       if (shouldTryBackend) {
         try {
           const backendResult = await processElectrophoresisWithBackend({
-            imageUrl: sourceImage.processingPreview,
+            imageUrl: processingPreview,
             fileName: sourceImage.nombre,
             crop,
             totalConcentration: safeTotalConcentration,
           })
           result = backendResult
-          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v3.5-guarded-baseline'
+          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v3.6-calibrated-boundaries'
           calibrationProfile = backendResult.calibration_profile ?? ''
           calibrationVersion = backendResult.calibration_version ?? ''
           processorSource = 'backend_fastapi'
           setBackendStatus('available')
         } catch (backendError) {
+          if (formatSupport.requiresBackend) {
+            const detail = backendError instanceof Error ? backendError.message : 'Backend no disponible.'
+            throw new Error(`No se pudo procesar ${sourceImage.nombre} en el backend requerido. ${detail}`)
+          }
+
           result = await processElectrophoresisImage({
-            imageUrl: sourceImage.processingPreview,
+            imageUrl: processingPreview,
             crop,
             totalConcentration: safeTotalConcentration,
           })
@@ -1527,7 +1650,7 @@ export default function NuevoAnalisisPage() {
         }
       } else {
         result = await processElectrophoresisImage({
-          imageUrl: sourceImage.processingPreview,
+          imageUrl: processingPreview,
           crop,
           totalConcentration: safeTotalConcentration,
         })
@@ -1930,7 +2053,7 @@ export default function NuevoAnalisisPage() {
                         </div>
                         <div className="rounded-xl p-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
                           <p className="text-[10px] font-semibold" style={{ color: '#6B7178' }}>Perfil</p>
-                          <p className="mt-1 font-semibold">{processorResult.profile_length} puntos</p>
+                          <p className="mt-1 font-semibold">{readAnalysisProfileLength(processorResult)} puntos</p>
                         </div>
                         <div className="rounded-xl p-2.5" style={{ background: '#F4F5F7', border: '1px solid #DFE0E5' }}>
                           <p className="text-[10px] font-semibold" style={{ color: '#6B7178' }}>Area total</p>
@@ -1947,8 +2070,8 @@ export default function NuevoAnalisisPage() {
 
                       <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
                         <p className="font-semibold" style={{ color: '#5C894A' }}>Picos y minimos detectados</p>
-                        <p className="mt-1" style={{ color: '#6B7178' }}>Picos: {formatIndexList(processorResult.peaks, processorResult.profile_length)}</p>
-                        <p className="mt-1" style={{ color: '#6B7178' }}>Minimos: {formatIndexList(processorResult.valleys, processorResult.profile_length)}</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Picos: {formatIndexList(processorResult.peaks, readAnalysisProfileLength(processorResult))}</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Minimos: {formatIndexList(processorResult.valleys, readAnalysisProfileLength(processorResult))}</p>
                       </div>
 
                       <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #DFE0E5' }}>
@@ -1972,11 +2095,11 @@ export default function NuevoAnalisisPage() {
                                   <td className="px-2 py-1.5 text-right">{formatDiagnosticNumber(processorFraction.percentage)}</td>
                                   <td className="px-2 py-1.5 text-right">{formatDisplayValue(vals[fraccion.key].pct)}</td>
                                   <td className="px-2 py-1.5 text-right" style={{ color: '#6B7178' }}>
-                                    {formatProfilePosition(processorFraction.start, processorResult.profile_length)} - {formatProfilePosition(processorFraction.end, processorResult.profile_length)}
+                                    {formatProfilePosition(processorFraction.start, readAnalysisProfileLength(processorResult))} - {formatProfilePosition(processorFraction.end, readAnalysisProfileLength(processorResult))}
                                   </td>
                                   <td className="px-2 py-1.5 text-right" style={{ color: '#6B7178' }}>
                                     {reviewFraction
-                                      ? `${formatProfilePosition(reviewFraction.start, processorResult.profile.length)} - ${formatProfilePosition(reviewFraction.end, processorResult.profile.length)}`
+                                      ? `${formatProfilePosition(reviewFraction.start, readAnalysisProfileLength(processorResult))} - ${formatProfilePosition(reviewFraction.end, readAnalysisProfileLength(processorResult))}`
                                       : '---'}
                                   </td>
                                 </tr>
