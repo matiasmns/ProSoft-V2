@@ -25,7 +25,7 @@ Adaptar el flujo de un requerimiento previo de electroforesis a este sistema mas
    - Permite subir imagenes del estudio.
    - Permite seleccionar tipo de imagen.
    - Incluye editor visual de recorte con `react-image-crop`.
-   - Guarda `izquierda`, `arriba`, `ancho`, `alto` y `separacion`.
+   - Guarda `izquierda`, `arriba`, `ancho` y `alto`.
    - Muestra vista previa del recorte y analisis de margenes/cobertura.
 
 3. Creacion del analisis
@@ -182,7 +182,7 @@ python -m unittest discover -s backend/tests
 3. Resolver PDF/reportes finales.
 4. Completar auditoria y trazabilidad formal.
 5. Evaluar si el densitograma interactivo debe migrar a Plotly o mantenerse en SVG.
-6. Definir mejor la logica de multiples muestras y uso real de `separacion`.
+6. Definir mejor la logica de multiples muestras si reaparece ese caso de uso.
 7. Decidir si el perfil de usuario debe crearse automaticamente al iniciar sesion.
 
 ## Riesgos / limitaciones actuales
@@ -200,4 +200,3 @@ El siguiente paso con mas valor tecnico es:
 2. contrastar salida del backend con resultados validados
 3. ajustar `backend/app/default_calibration.json`
 4. despues sumar rangos de referencia clinicos en la interfaz
-

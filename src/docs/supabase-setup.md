@@ -141,7 +141,7 @@ useEffect(() => {
 Pasar los valores al componente:
 
 ```tsx
-<TopBar name={userName} role={userRole} />
+<TopBar />
 ```
 
 ---

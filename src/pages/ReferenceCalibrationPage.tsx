@@ -207,7 +207,7 @@ export default function ReferenceCalibrationPage() {
       <Sidebar active={activeSection} onSelect={setActiveSection} />
 
       <div className="flex flex-col flex-1 min-w-0">
-        <TopBar name="Usuario" role="Cargo" />
+        <TopBar />
 
         <main className="flex-1 p-8">
           <div className="flex items-center gap-2 mb-6">
@@ -377,6 +377,7 @@ export default function ReferenceCalibrationPage() {
                           <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Tabla %</th>
                           <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Motor %</th>
                           <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Rango tabla</th>
+                          <th className="text-right px-2 py-2" style={{ color: '#54585E' }}>Rango motor</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -387,6 +388,7 @@ export default function ReferenceCalibrationPage() {
                             <td className="px-2 py-1.5 text-right" style={{ color: '#54585E' }}>{formatNumber(detail.reviewPercentage, '%')}</td>
                             <td className="px-2 py-1.5 text-right" style={{ color: '#54585E' }}>{formatNumber(detail.processorPercentage, '%')}</td>
                             <td className="px-2 py-1.5 text-right" style={{ color: '#6B7178' }}>{detail.reviewRange}</td>
+                            <td className="px-2 py-1.5 text-right" style={{ color: '#6B7178' }}>{detail.processorRange}</td>
                           </tr>
                         ))}
                       </tbody>

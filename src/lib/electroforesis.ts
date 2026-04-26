@@ -16,7 +16,6 @@ export type CropSettings = {
   arriba: string
   ancho: string
   alto: string
-  separacion: string
 }
 
 export type CropPayload = {
@@ -24,7 +23,6 @@ export type CropPayload = {
   arriba: number | null
   ancho: number | null
   alto: number | null
-  separacion: number | null
 }
 
 export type ProcessorImageDraft = {
@@ -34,9 +32,17 @@ export type ProcessorImageDraft = {
   storagePath?: string | null
 }
 
+export type ResultadoCrudoLastStep =
+  | 'sample_selected'
+  | 'sample_uploaded'
+  | 'sample_upload_failed'
+  | 'analysis_processed_backend'
+  | 'analysis_processed_local'
+  | 'analysis_saved'
+
 export type ResultadoCrudo = {
   processor_status: 'pending' | 'manual_review' | 'processed' | 'failed'
-  last_step: 'sample_selected' | 'sample_uploaded' | 'sample_upload_failed' | 'analysis_saved'
+  last_step: ResultadoCrudoLastStep
   algorithm_version: string | null
   cleanup_error?: string | null
   input_images: Array<{
@@ -58,7 +64,6 @@ export const emptyCropSettings: CropSettings = {
   arriba: '0',
   ancho: '35',
   alto: '100',
-  separacion: '',
 }
 
 function toNullableNumber(value: string) {
@@ -99,7 +104,6 @@ export function normalizeCropSettings(crop: CropSettings): CropPayload {
     arriba: toNullableNumber(crop.arriba),
     ancho: toNullableNumber(crop.ancho),
     alto: toNullableNumber(crop.alto),
-    separacion: toNullableNumber(crop.separacion),
   }
 }
 
@@ -205,7 +209,7 @@ export async function createSignedAnalisisImageUrl(storagePath: string) {
     .createSignedUrl(storagePath, 60 * 60)
 
   if (error) {
-    return ''
+    throw new Error(error.message)
   }
 
   return data.signedUrl

@@ -67,7 +67,6 @@ function FormInput({
 
 export default function IngresoPacientePage() {
   const navigate = useNavigate()
-  const [activeSection, setActiveSection] = useState('Ingresa Paciente')
   const [form, setForm] = useState<PacienteForm>(emptyForm)
   const [dniSearch, setDniSearch] = useState('')
   const [searching, setSearching] = useState(false)
@@ -174,10 +173,10 @@ export default function IngresoPacientePage() {
       className="flex min-h-screen"
       style={{ background: 'linear-gradient(135deg, #EEF1F3, #E5EAED)' }}
     >
-      <Sidebar active={activeSection} onSelect={setActiveSection} />
+      <Sidebar active="patient-intake" onSelect={() => {}} />
 
       <div className="flex flex-col flex-1">
-        <TopBar name="Usuario" role="Cargo" />
+        <TopBar />
 
         <main className="flex-1 p-10">
           <h1 className="text-2xl font-semibold mb-1" style={{ color: '#5C894A' }}>

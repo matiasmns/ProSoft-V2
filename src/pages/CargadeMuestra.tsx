@@ -93,10 +93,7 @@ function toPercentCrop(crop: CropSettings, dimensions: ImageDimensions | null): 
 
 function cropToSettings(crop: PercentCrop | undefined, dimensions: ImageDimensions | null): CropSettings {
   if (!crop || !dimensions || crop.width < 0.1 || crop.height < 0.1) {
-    return {
-      ...emptyCropSettings,
-      separacion: '',
-    }
+    return { ...emptyCropSettings }
   }
 
   return {
@@ -104,7 +101,6 @@ function cropToSettings(crop: PercentCrop | undefined, dimensions: ImageDimensio
     arriba: Math.round((crop.y * dimensions.height) / 100).toString(),
     ancho: Math.round((crop.width * dimensions.width) / 100).toString(),
     alto: Math.round((crop.height * dimensions.height) / 100).toString(),
-    separacion: '',
   }
 }
 
@@ -185,7 +181,6 @@ export default function CargadeMuestra() {
   const [searchParams] = useSearchParams()
   const pacienteId = searchParams.get('paciente_id') ?? ''
   const navigate = useNavigate()
-  const [activeSection, setActiveSection] = useState('Ingresa Paciente')
 
   const [images, setImages] = useState<ImageFile[]>([])
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null)
@@ -274,7 +269,6 @@ export default function CargadeMuestra() {
         crop: {
           ...image.crop,
           ...nextCrop,
-          separacion: image.crop.separacion,
         },
       }
     }))
@@ -313,10 +307,7 @@ export default function CargadeMuestra() {
       currentIndex === index
         ? {
             ...image,
-            crop: {
-              ...emptyCropSettings,
-              separacion: image.crop.separacion,
-            },
+            crop: { ...emptyCropSettings },
           }
         : image
     )))
@@ -487,10 +478,10 @@ export default function CargadeMuestra() {
       className="flex min-h-screen"
       style={{ background: 'linear-gradient(135deg, #EEF1F3, #E5EAED)' }}
     >
-      <Sidebar active={activeSection} onSelect={setActiveSection} />
+      <Sidebar active="patient-intake" onSelect={() => {}} />
 
       <div className="flex flex-col flex-1">
-        <TopBar name="Usuario" role="Cargo" />
+        <TopBar />
 
         <main className="flex-1 p-10">
           <div className="flex items-center gap-2 mb-1">
@@ -559,7 +550,7 @@ export default function CargadeMuestra() {
                 Cargar imagen
               </button>
               <p className="text-xs mt-3" style={{ color: '#DFE0E5' }}>
-                PNG, JPG, TIFF, PDF
+                PNG, JPG, WEBP, BMP, TIFF
               </p>
               <input
                 ref={fileRef}
@@ -774,9 +765,8 @@ export default function CargadeMuestra() {
                             ['arriba', 'Arriba'],
                             ['ancho', 'Ancho'],
                             ['alto', 'Alto'],
-                            ['separacion', 'Separacion'],
                           ] as Array<[keyof CropSettings, string]>).map(([key, label]) => (
-                            <label key={key} className={`flex flex-col gap-1 ${key === 'separacion' ? 'col-span-2' : ''}`}>
+                            <label key={key} className="flex flex-col gap-1">
                               <span className="text-[11px]" style={{ color: '#54585E' }}>{label}</span>
                               <input
                                 type="number"

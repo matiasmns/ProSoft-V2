@@ -13,23 +13,6 @@ ALGORITHM_VERSION = "fastapi-opencv-v3.6-calibrated-boundaries"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
-PROJECTION_TOP_FRACTION = 0.38
-MIN_SIGNAL_DYNAMIC_RANGE = 0.035
-HIGH_VALLEY_WARNING_LEVEL = 0.34
-GLOBAL_BASELINE_PERCENTILE = 5.0
-RESIDUAL_BASELINE_PERCENTILE = 2.0
-LOCAL_BASELINE_MIN_CORRELATION = 0.90
-LOCAL_BASELINE_MAX_PEAK_SHIFT_RATIO = 0.065
-ALBUMIN_TARGET_POSITION_IN_WINDOW = 0.60
-BOUNDARY_SHIFT_LIMIT_RATIO = 0.08
-GAUSSIAN_WIDTH_MIN_RATIO = 0.026
-GAUSSIAN_WIDTH_SCALES = (0.7, 1.0, 1.35)
-GAUSSIAN_FIT_ITERATIONS = 1200
-GAUSSIAN_FIT_EPSILON = 1e-9
-REFERENCE_VALLEY_SNAP_WINDOW_RATIO = 0.04
-REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP = 1.25
-REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP = 1.5
-
 
 def clamp(value: int, minimum: int, maximum: int) -> int:
     return min(max(value, minimum), maximum)
@@ -65,16 +48,16 @@ def prepare_grayscale(image: np.ndarray, calibration: ProcessorCalibration) -> n
     return gray
 
 
-def robust_projection(gray: np.ndarray, axis: str) -> np.ndarray:
+def robust_projection(gray: np.ndarray, axis: str, calibration: ProcessorCalibration) -> np.ndarray:
     darkness = 1.0 - gray
     if axis == "x":
         cross_length = darkness.shape[0]
-        top_count = max(1, int(round(cross_length * PROJECTION_TOP_FRACTION)))
+        top_count = max(1, int(round(cross_length * calibration.projection_top_fraction)))
         sorted_values = np.sort(darkness, axis=0)
         return sorted_values[-top_count:, :].mean(axis=0)
 
     cross_length = darkness.shape[1]
-    top_count = max(1, int(round(cross_length * PROJECTION_TOP_FRACTION)))
+    top_count = max(1, int(round(cross_length * calibration.projection_top_fraction)))
     sorted_values = np.sort(darkness, axis=1)
     return sorted_values[:, -top_count:].mean(axis=1)
 
@@ -82,7 +65,7 @@ def robust_projection(gray: np.ndarray, axis: str) -> np.ndarray:
 def finalize_normalized_signal(corrected: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
     sigma = max(calibration.smoothing_sigma_min, corrected.size / calibration.smoothing_sigma_divisor)
     smooth = gaussian_filter1d(corrected, sigma=sigma, mode="nearest")
-    smooth = np.clip(smooth - float(np.percentile(smooth, RESIDUAL_BASELINE_PERCENTILE)), 0.0, None)
+    smooth = np.clip(smooth - float(np.percentile(smooth, calibration.residual_baseline_percentile * 100.0)), 0.0, None)
 
     if calibration.signal_floor > 0:
         smooth = np.clip(smooth - calibration.signal_floor * float(smooth.max(initial=0.0)), 0.0, None)
@@ -98,7 +81,7 @@ def finalize_normalized_signal(corrected: np.ndarray, calibration: ProcessorCali
 
 
 def normalize_with_global_baseline(signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
-    baseline = float(np.percentile(signal, GLOBAL_BASELINE_PERCENTILE))
+    baseline = float(np.percentile(signal, calibration.global_baseline_percentile * 100.0))
     corrected = np.clip(signal - baseline, 0.0, None)
     return finalize_normalized_signal(corrected, calibration)
 
@@ -114,11 +97,11 @@ def normalize_with_local_baseline(signal: np.ndarray, calibration: ProcessorCali
     return finalize_normalized_signal(corrected, calibration)
 
 
-def local_baseline_preserves_shape(raw_signal: np.ndarray, normalized: np.ndarray) -> bool:
+def local_baseline_preserves_shape(raw_signal: np.ndarray, normalized: np.ndarray, calibration: ProcessorCalibration) -> bool:
     max_index = max(raw_signal.size - 1, 1)
     raw_peak_index = int(np.argmax(raw_signal))
     normalized_peak_index = int(np.argmax(normalized))
-    max_peak_shift = max(3, int(round(max_index * LOCAL_BASELINE_MAX_PEAK_SHIFT_RATIO)))
+    max_peak_shift = max(3, int(round(max_index * calibration.local_baseline_max_peak_shift_ratio)))
 
     if abs(raw_peak_index - normalized_peak_index) > max_peak_shift:
         return False
@@ -127,7 +110,7 @@ def local_baseline_preserves_shape(raw_signal: np.ndarray, normalized: np.ndarra
         return False
 
     correlation = float(np.corrcoef(raw_signal, normalized)[0, 1])
-    return np.isfinite(correlation) and correlation >= LOCAL_BASELINE_MIN_CORRELATION
+    return np.isfinite(correlation) and correlation >= calibration.local_baseline_min_correlation
 
 
 def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) -> np.ndarray:
@@ -136,13 +119,13 @@ def normalize_signal(raw_signal: np.ndarray, calibration: ProcessorCalibration) 
 
     signal = raw_signal.astype(np.float64)
     dynamic_range = float(np.percentile(signal, 98) - np.percentile(signal, 2))
-    if dynamic_range < MIN_SIGNAL_DYNAMIC_RANGE:
+    if dynamic_range < calibration.min_signal_dynamic_range:
         raise ValueError("La imagen no contiene suficiente contraste para extraer una senal util.")
 
     global_normalized = normalize_with_global_baseline(signal, calibration)
     local_normalized = normalize_with_local_baseline(signal, calibration)
 
-    if local_baseline_preserves_shape(signal, local_normalized):
+    if local_baseline_preserves_shape(signal, local_normalized, calibration):
         return local_normalized
 
     return global_normalized
@@ -213,12 +196,18 @@ def measure_target_error(signal: np.ndarray, boundaries: list[int], target_perce
     return float(sum(errors)), float(max(errors, default=0.0))
 
 
-def find_nearest_reference_valley(values: np.ndarray, target_index: int, min_allowed: int, max_allowed: int) -> int:
+def find_nearest_reference_valley(
+    values: np.ndarray,
+    target_index: int,
+    min_allowed: int,
+    max_allowed: int,
+    calibration: ProcessorCalibration,
+) -> int:
     max_index = max(0, values.size - 1)
     safe_min = clamp(min_allowed, 0, max_index)
     safe_max = clamp(max_allowed, safe_min, max_index)
     safe_target = clamp(target_index, safe_min, safe_max)
-    radius = max(2, int(round(max_index * REFERENCE_VALLEY_SNAP_WINDOW_RATIO)))
+    radius = max(2, int(round(max_index * calibration.reference_valley_snap_window_ratio)))
     start = max(safe_min, safe_target - radius)
     end = min(safe_max, safe_target + radius)
 
@@ -255,8 +244,12 @@ def estimate_profile_shift_ratio(signal: np.ndarray, calibration: ProcessorCalib
     search_end_ratio = calibration.fraction_windows[min(1, len(calibration.fraction_windows) - 1)].end
     observed_peak = find_peak_index(signal, 0, int(round(search_end_ratio * max_index)))
     observed_peak_ratio = observed_peak / max_index
-    expected_peak_ratio = albumin_window.start + ((albumin_window.end - albumin_window.start) * ALBUMIN_TARGET_POSITION_IN_WINDOW)
-    return clamp_ratio(observed_peak_ratio - expected_peak_ratio, -BOUNDARY_SHIFT_LIMIT_RATIO, BOUNDARY_SHIFT_LIMIT_RATIO)
+    expected_peak_ratio = albumin_window.start + ((albumin_window.end - albumin_window.start) * calibration.albumin_target_position_in_window)
+    return clamp_ratio(
+        observed_peak_ratio - expected_peak_ratio,
+        -calibration.boundary_shift_limit_ratio,
+        calibration.boundary_shift_limit_ratio,
+    )
 
 
 def fit_fraction_target_percentages(signal: np.ndarray, calibration: ProcessorCalibration) -> list[float]:
@@ -268,10 +261,10 @@ def fit_fraction_target_percentages(signal: np.ndarray, calibration: ProcessorCa
 
     for fraction_index, window in enumerate(calibration.fraction_windows):
         center = clamp_ratio(((window.start + window.end) / 2.0) + profile_shift_ratio, 0.0, 1.0)
-        base_width = max((window.end - window.start) / 3.2, GAUSSIAN_WIDTH_MIN_RATIO)
+        base_width = max((window.end - window.start) / 3.2, calibration.gaussian_width_min_ratio)
 
-        for scale in GAUSSIAN_WIDTH_SCALES:
-            sigma = max(base_width * scale, GAUSSIAN_WIDTH_MIN_RATIO * 0.6)
+        for scale in calibration.gaussian_width_scales:
+            sigma = max(base_width * scale, calibration.gaussian_width_min_ratio * 0.6)
             basis = np.exp(-0.5 * np.square((x_axis - center) / sigma))
             basis_columns.append(basis)
             basis_owners.append(fraction_index)
@@ -284,9 +277,9 @@ def fit_fraction_target_percentages(signal: np.ndarray, calibration: ProcessorCa
     basis_matrix = np.stack(basis_columns, axis=1)
     weights = np.full(basis_matrix.shape[1], 0.1, dtype=np.float64)
 
-    for _ in range(GAUSSIAN_FIT_ITERATIONS):
+    for _ in range(calibration.gaussian_fit_iterations):
         numerator = basis_matrix.T @ signal
-        denominator = basis_matrix.T @ (basis_matrix @ weights) + GAUSSIAN_FIT_EPSILON
+        denominator = basis_matrix.T @ (basis_matrix @ weights) + calibration.gaussian_fit_epsilon
         weights *= numerator / denominator
 
     fraction_areas = np.zeros(len(FRACTION_KEYS), dtype=np.float64)
@@ -346,14 +339,15 @@ def build_boundaries(signal: np.ndarray, calibration: ProcessorCalibration | Non
             snapped[index],
             snapped[index - 1] + min_gap,
             snapped[index + 1] - min_gap,
+            active_calibration,
         )
 
     area_only_total_error, _ = measure_target_error(signal, area_only, target_percentages)
     snapped_total_error, snapped_max_error = measure_target_error(signal, snapped, target_percentages)
 
     if (
-        snapped_max_error > REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP
-        or snapped_total_error > area_only_total_error + REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP
+        snapped_max_error > active_calibration.reference_max_fraction_error_after_snap
+        or snapped_total_error > area_only_total_error + active_calibration.reference_max_total_error_increase_after_snap
     ):
         return area_only
 
@@ -411,7 +405,7 @@ def build_warnings(
         warnings.append("Se detectaron pocos picos; revisar imagen y parametros.")
 
     internal_boundaries = boundaries[1:-1]
-    high_valleys = [boundary for boundary in internal_boundaries if float(signal[boundary]) >= HIGH_VALLEY_WARNING_LEVEL]
+    high_valleys = [boundary for boundary in internal_boundaries if float(signal[boundary]) >= calibration.high_valley_warning_level]
     if high_valleys:
         warnings.append("Uno o mas separadores caen en valles poco definidos; revisar posiciones manualmente.")
 
@@ -436,7 +430,7 @@ def process_electrophoresis_image(
     gray = prepare_grayscale(image, active_calibration)
     cropped = gray[crop.top : crop.top + crop.height, crop.left : crop.left + crop.width]
     axis = "x" if crop.width >= crop.height else "y"
-    raw_signal = robust_projection(cropped, axis)
+    raw_signal = robust_projection(cropped, axis, active_calibration)
     signal = normalize_signal(raw_signal, active_calibration)
 
     detected_peaks = detect_peaks(signal, active_calibration)

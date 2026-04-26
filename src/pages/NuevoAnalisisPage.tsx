@@ -10,6 +10,7 @@ import {
   type CropPayload,
 } from '../lib/electroforesis'
 import { processElectrophoresisImage, type LocalProcessorResult } from '../lib/localProcessor'
+import { LOCAL_FALLBACK_ALGORITHM_VERSION, resolveLocalProcessorCalibration } from '../lib/processorCalibration'
 import {
   REVIEW_SEPARATOR_DEFS,
   buildDefaultSeparatorRatios,
@@ -30,7 +31,6 @@ type FlexibleCropState = {
   arriba?: number | string | null
   ancho?: number | string | null
   alto?: number | string | null
-  separacion?: number | string | null
 }
 type IncomingImageState = { preview?: string; tipo?: string; nombre?: string; storagePath?: string; crop?: FlexibleCropState | CropPayload | null }
 type AnalisisRow = {
@@ -327,7 +327,6 @@ function normalizeIncomingCrop(crop: FlexibleCropState | CropPayload | null | un
     arriba: toNullableCropNumber(crop.arriba),
     ancho: toNullableCropNumber(crop.ancho),
     alto: toNullableCropNumber(crop.alto),
-    separacion: toNullableCropNumber(crop.separacion),
   }
 }
 
@@ -668,12 +667,7 @@ async function refreshProcessingPreview(image: ImagePreview) {
     return image.processingPreview
   }
 
-  const renewedUrl = await createSignedAnalisisImageUrl(image.storagePath)
-  if (!renewedUrl) {
-    throw new Error('No se pudo renovar el acceso al densitograma guardado. Recarga el analisis e intenta de nuevo.')
-  }
-
-  return renewedUrl
+  return await createSignedAnalisisImageUrl(image.storagePath)
 }
 
 const DENSITOGRAM_X_VISUAL_SCALE = 1
@@ -1535,37 +1529,42 @@ export default function NuevoAnalisisPage() {
       const incomingImages = normalizeIncomingImages(location.state?.images as IncomingImageState[] | undefined)
       let imageSeeds = incomingImages
 
-      if (imageSeeds.length === 0) {
-        const { data: analisisImagenes, error: imagenesError } = await supabase
-          .from('analisis_imagenes')
-          .select('tipo,url,nombre_archivo')
-          .eq('analisis_id', analisisId)
-          .returns<AnalisisImagenRow[]>()
-        if (imagenesError) { setError(imagenesError.message); setLoadingExisting(false); return }
+      try {
+        if (imageSeeds.length === 0) {
+          const { data: analisisImagenes, error: imagenesError } = await supabase
+            .from('analisis_imagenes')
+            .select('tipo,url,nombre_archivo')
+            .eq('analisis_id', analisisId)
+            .returns<AnalisisImagenRow[]>()
+          if (imagenesError) { setError(imagenesError.message); setLoadingExisting(false); return }
 
-        imageSeeds = await Promise.all((analisisImagenes ?? []).map(async image => {
-          const processingPreview = await createSignedAnalisisImageUrl(image.url)
+          imageSeeds = await Promise.all((analisisImagenes ?? []).map(async image => {
+            const processingPreview = await createSignedAnalisisImageUrl(image.url)
+            return {
+              preview: processingPreview,
+              processingPreview,
+              tipo: image.tipo ?? 'otro',
+              nombre: image.nombre_archivo ?? 'Archivo sin nombre',
+              storagePath: image.url,
+            }
+          }))
+        }
+
+        const resolvedImages = await Promise.all(imageSeeds.map(async image => {
+          const crop = findCropForImage(image, storedInputImages)
           return {
-            preview: processingPreview,
-            processingPreview,
-            tipo: image.tipo ?? 'otro',
-            nombre: image.nombre_archivo ?? 'Archivo sin nombre',
-            storagePath: image.url,
+            ...image,
+            draftCrop: crop,
+            preview: await createCroppedAnalisisImagePreview(image.processingPreview, crop),
           }
         }))
+
+        setImages(resolvedImages)
+        setLoadingExisting(false)
+      } catch (imageError) {
+        setError(imageError instanceof Error ? imageError.message : 'No se pudo recuperar el densitograma guardado.')
+        setLoadingExisting(false)
       }
-
-      const resolvedImages = await Promise.all(imageSeeds.map(async image => {
-        const crop = findCropForImage(image, storedInputImages)
-        return {
-          ...image,
-          draftCrop: crop,
-          preview: await createCroppedAnalisisImagePreview(image.processingPreview, crop),
-        }
-      }))
-
-      setImages(resolvedImages)
-      setLoadingExisting(false)
     }
     hydrate()
   }, [analisisId, location.state?.images])
@@ -1614,7 +1613,7 @@ export default function NuevoAnalisisPage() {
       }
 
       let result: LocalProcessorResult
-      let algorithmVersion = 'local-calibrated-v3.6'
+      let algorithmVersion = LOCAL_FALLBACK_ALGORITHM_VERSION
       let processorSource: ProcessorSource = 'frontend_local_fallback'
       let backendFallbackDetail = ''
       let calibrationProfile = ''
@@ -1640,20 +1639,28 @@ export default function NuevoAnalisisPage() {
             throw new Error(`No se pudo procesar ${sourceImage.nombre} en el backend requerido. ${detail}`)
           }
 
+          const localCalibration = await resolveLocalProcessorCalibration()
           result = await processElectrophoresisImage({
             imageUrl: processingPreview,
             crop,
             totalConcentration: safeTotalConcentration,
+            calibration: localCalibration,
           })
+          calibrationProfile = localCalibration.profile_name
+          calibrationVersion = localCalibration.profile_version
           backendFallbackDetail = backendError instanceof Error ? backendError.message : 'Backend no disponible.'
           setBackendStatus('unavailable')
         }
       } else {
+        const localCalibration = await resolveLocalProcessorCalibration()
         result = await processElectrophoresisImage({
           imageUrl: processingPreview,
           crop,
           totalConcentration: safeTotalConcentration,
+          calibration: localCalibration,
         })
+        calibrationProfile = localCalibration.profile_name
+        calibrationVersion = localCalibration.profile_version
         backendFallbackDetail = processorMode === 'local'
           ? 'Se uso el procesador local por seleccion manual.'
           : ANALYSIS_API_ENABLED
@@ -1736,12 +1743,16 @@ export default function NuevoAnalisisPage() {
       processorResult,
       processorMeta,
     )
-    const payload = buildAnalysisPayload(user?.id ?? null, nextRawResult)
+    const persistedRawResult = {
+      ...nextRawResult,
+      last_step: 'analysis_saved',
+    }
+    const payload = buildAnalysisPayload(user?.id ?? null, persistedRawResult)
     const query = analisisId ? supabase.from('analisis_electroforesis').update(payload).eq('id', analisisId) : supabase.from('analisis_electroforesis').insert(payload)
     const { error: saveError } = await query
 
     if (saveError) { setError(saveError.message); setSaving(false); return }
-    setRawResult(nextRawResult)
+    setRawResult(persistedRawResult)
     setSaving(false)
     setSuccess(analisisId ? 'Analisis guardado correctamente.' : 'Analisis registrado correctamente.')
     setTimeout(() => navigate('/home'), 1500)
@@ -1751,9 +1762,9 @@ export default function NuevoAnalisisPage() {
     <>
       <style>{PRINT_STYLES}</style>
       <div className="analysis-screen flex min-h-screen" style={{ background: 'linear-gradient(135deg, #EEF1F3, #E5EAED)' }}>
-      <Sidebar active="Ingresa Paciente" onSelect={() => {}} />
+      <Sidebar active="patient-intake" onSelect={() => {}} />
       <div className="flex flex-col flex-1 min-w-0">
-        <TopBar name="Usuario" role="Cargo" />
+        <TopBar />
         <main className="flex-1 p-8">
           <div className="flex items-center gap-2 mb-6">
             <FlaskConical size={22} style={{ color: '#5C894A' }} />

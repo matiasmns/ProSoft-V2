@@ -152,7 +152,7 @@ export default function PacientesLista() {
       <Sidebar active={activeSection} onSelect={setActiveSection} />
 
       <div className="flex flex-col flex-1">
-        <TopBar name="Usuario" role="Cargo" />
+        <TopBar />
 
         <main className="flex-1 p-10">
           <h1 className="text-2xl font-semibold mb-1" style={{ color: '#5C894A' }}>

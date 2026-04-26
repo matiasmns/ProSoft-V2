@@ -42,7 +42,7 @@ El sistema asistirá al profesional del laboratorio. No realizará diagnóstico 
 
 1. El usuario inicia sesión.
 2. Registra o selecciona paciente y muestra.
-3. Se carga una imagen con la muestra. Esta esta en la seccion CargadeMuestra.tsx. Este componente se encargaria de analizar la imagen y tambien de hacer ajustes si hay que reajustar el cuadro de analisis o area de referencia aplicando valores. Izquierda,arriba,ancho,alto,separacion. Aca hay casos donde hay multiples muestras escaneadas y se tienen que aislar. y despues de eso se prosigue.
+3. Se carga una imagen con la muestra. Esta esta en la seccion CargadeMuestra.tsx. Este componente se encarga de analizar la imagen y de ajustar el cuadro de analisis o area de referencia aplicando valores de izquierda, arriba, ancho y alto. La separacion ya no forma parte del runtime actual; si vuelven casos con multiples muestras escaneadas, habra que definir una estrategia explicita para aislarlas.
 -Ahi se va al componente NuevoAnalisisPage.tsx donde se ven los resultados.
 4. Ingresa proteínas totales séricas.
 5. El sistema ejecuta preprocesamiento y análisis.

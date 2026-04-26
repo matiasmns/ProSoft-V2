@@ -44,7 +44,6 @@ export async function processElectrophoresisWithBackend(input: {
   appendNumber(formData, 'crop_top', input.crop?.arriba)
   appendNumber(formData, 'crop_width', input.crop?.ancho)
   appendNumber(formData, 'crop_height', input.crop?.alto)
-  appendNumber(formData, 'crop_separation', input.crop?.separacion)
 
   if (input.totalConcentration != null && !Number.isNaN(input.totalConcentration)) {
     formData.append('total_concentration', String(input.totalConcentration))

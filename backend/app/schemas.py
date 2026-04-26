@@ -68,12 +68,16 @@ class CalibrationResponse(BaseModel):
     profile_name: str
     profile_version: str
     description: str | None = None
-    clahe_clip_limit: float
-    clahe_tile_grid_size: int
     gaussian_blur_kernel_size: int
+    projection_top_fraction: float
     smoothing_sigma_divisor: float
     smoothing_sigma_min: float
     signal_floor: float
+    min_signal_dynamic_range: float
+    global_baseline_percentile: float
+    residual_baseline_percentile: float
+    local_baseline_min_correlation: float
+    local_baseline_max_peak_shift_ratio: float
     baseline_window_divisor: int
     baseline_window_min: int
     peak_prominence: float
@@ -83,5 +87,14 @@ class CalibrationResponse(BaseModel):
     crop_warning_min_width: int
     crop_warning_min_height: int
     profile_downsample_points: int
-    valley_offsets: list[float]
+    high_valley_warning_level: float
+    albumin_target_position_in_window: float
+    boundary_shift_limit_ratio: float
+    gaussian_width_min_ratio: float
+    gaussian_width_scales: list[float]
+    gaussian_fit_iterations: int
+    gaussian_fit_epsilon: float
+    reference_valley_snap_window_ratio: float
+    reference_max_fraction_error_after_snap: float
+    reference_max_total_error_increase_after_snap: float
     fraction_windows: list[FractionWindowPayload]

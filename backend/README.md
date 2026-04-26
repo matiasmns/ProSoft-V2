@@ -29,7 +29,6 @@ Campos `multipart/form-data`:
 - `crop_top`
 - `crop_width`
 - `crop_height`
-- `crop_separation`
 - `total_concentration`
 
 El frontend puede apuntar al backend mediante `VITE_ANALYSIS_API_URL`. Si esa variable no existe, el frontend no intenta usar FastAPI y procesa solo en local.

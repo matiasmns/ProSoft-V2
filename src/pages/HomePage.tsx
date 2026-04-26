@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FlaskConical, Users, ClipboardList, SlidersHorizontal } from 'lucide-react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
-import { supabase } from '../lib/supabase'
 
 type Card = {
   id: string
@@ -14,7 +13,7 @@ type Card = {
 
 const cards: Card[] = [
   {
-    id: 'Ingresa Paciente',
+    id: 'patient-intake',
     label: 'Ingresar Paciente',
     description: 'Registra un nuevo paciente en el sistema.',
     icon: <FlaskConical size={28} />,
@@ -40,7 +39,7 @@ const cards: Card[] = [
 ]
 
 const cardRoutes: Record<string, string> = {
-  'Ingresa Paciente':   '/paciente/nuevo',
+  'patient-intake':   '/paciente/nuevo',
   'pacientes':          '/pacientes',
   'historial-muestras': '/historial',
   'reference-calibration': '/calibracion-referencias',
@@ -48,37 +47,7 @@ const cardRoutes: Record<string, string> = {
 
 export default function HomePage() {
   const navigate = useNavigate()
-  const [activeSection, setActiveSection] = useState('Ingresa Paciente')
-  const [userName, setUserName] = useState('Usuario')
-  const [userRole, setUserRole] = useState('Cargo')
-
-  useEffect(() => {
-    async function fetchProfile() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const fallbackName = user.email?.split('@')[0] || 'Usuario'
-
-      const { data, error } = await supabase
-        .from('profile')
-        .select('name, role')
-        .eq('id', user.id)
-        .maybeSingle()
-
-      if (error) {
-        console.warn('No se pudo leer el perfil del usuario en Supabase.', error.message)
-      }
-
-      if (data) {
-        setUserName(data.name || fallbackName)
-        setUserRole(data.role || 'Cargo')
-        return
-      }
-
-      setUserName(fallbackName)
-    }
-    fetchProfile()
-  }, [])
+  const [activeSection, setActiveSection] = useState('home')
 
   return (
     <div
@@ -89,7 +58,7 @@ export default function HomePage() {
 
       {/* Right column */}
       <div className="flex flex-col flex-1">
-        <TopBar name={userName} role={userRole} />
+        <TopBar />
 
         {/* Main content */}
         <main className="flex-1 p-10">

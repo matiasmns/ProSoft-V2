@@ -57,10 +57,8 @@ async def process_analysis(
     crop_top: int | None = Form(default=None),
     crop_width: int | None = Form(default=None),
     crop_height: int | None = Form(default=None),
-    crop_separation: int | None = Form(default=None),
     total_concentration: float | None = Form(default=None),
 ) -> ProcessAnalysisResponse:
-    _ = crop_separation
     contents = await file.read()
     calibration = get_calibration()
 

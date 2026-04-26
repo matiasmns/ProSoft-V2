@@ -19,15 +19,15 @@ export default function LoginPage() {
     setLoading(true)
 
     const form = e.currentTarget
-    const email    = (form.elements.namedItem('email')    as HTMLInputElement).value
+    const email = (form.elements.namedItem('email') as HTMLInputElement).value
     const password = (form.elements.namedItem('password') as HTMLInputElement).value
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { error: authError } = await supabase.auth.signInWithPassword({ email, password })
 
     setLoading(false)
 
-    if (error) {
-      setError('Correo o contraseña incorrectos.')
+    if (authError) {
+      setError('Correo o contrasena incorrectos.')
       return
     }
 
@@ -43,7 +43,6 @@ export default function LoginPage() {
         className="w-full max-w-sm rounded-2xl shadow-lg p-8"
         style={{ background: 'linear-gradient(160deg, #FBFBFC, #FAF9FB)' }}
       >
-        {/* Header */}
         <div className="mb-8 text-center">
           <div className="flex justify-center mb-3">
             <ShieldPlus size={40} style={{ color: '#5C894A' }} />
@@ -56,12 +55,10 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Form */}
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-          {/* Email */}
           <div className="flex flex-col gap-1">
             <label className="text-sm font-medium" style={{ color: '#54585E' }}>
-              Correo electrónico
+              Correo electronico
             </label>
             <div className="relative">
               <Mail
@@ -82,10 +79,9 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Password */}
           <div className="flex flex-col gap-1">
             <label className="text-sm font-medium" style={{ color: '#54585E' }}>
-              Contraseña
+              Contrasena
             </label>
             <div className="relative">
               <Lock
@@ -97,7 +93,7 @@ export default function LoginPage() {
                 name="password"
                 type={showPassword ? 'text' : 'password'}
                 required
-                placeholder="••••••••"
+                placeholder="********"
                 className="w-full rounded-lg pl-9 pr-10 py-2.5 text-sm outline-none transition"
                 style={{ background: '#FFFFFF', color: '#54585E', border: '1px solid #DFE0E5' }}
                 onFocus={e => (e.currentTarget.style.borderColor = '#5C894A')}
@@ -105,7 +101,7 @@ export default function LoginPage() {
               />
               <button
                 type="button"
-                onClick={() => setShowPassword(v => !v)}
+                onClick={() => setShowPassword(value => !value)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
                 style={{ color: '#54585E' }}
               >
@@ -114,21 +110,18 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Error message */}
           {error && (
             <p className="text-xs text-center" style={{ color: '#c0392b' }}>
               {error}
             </p>
           )}
 
-          {/* Forgot password */}
           <div className="text-right -mt-2">
-            <a href="#" className="text-xs hover:underline" style={{ color: '#5C894A' }}>
-              ¿Olvidaste tu contraseña?
-            </a>
+            <span className="text-xs" style={{ color: '#5C894A' }}>
+              Si olvidaste tu acceso, solicita reinicio al administrador.
+            </span>
           </div>
 
-          {/* Submit button */}
           <button
             type="submit"
             disabled={loading}
@@ -150,7 +143,7 @@ export default function LoginPage() {
               e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.25)'
             }}
           >
-            {loading ? 'Ingresando...' : 'Iniciar sesión'}
+            {loading ? 'Ingresando...' : 'Iniciar sesion'}
           </button>
         </form>
       </div>

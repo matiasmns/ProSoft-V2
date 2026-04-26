@@ -1,6 +1,13 @@
 import type { CropPayload } from './electroforesis'
+import {
+  getBundledProcessorCalibration,
+  PROCESSOR_FRACTION_KEYS,
+  type ProcessorCalibrationProfile,
+  type ProcessorFractionKey,
+  type ProcessorFractionWindow,
+} from './processorCalibration'
 
-export type LocalFractionKey = 'albumina' | 'alfa_1' | 'alfa_2' | 'beta_1' | 'beta_2' | 'gamma'
+export type LocalFractionKey = ProcessorFractionKey
 
 export type LocalFractionResult = {
   start: number
@@ -26,48 +33,7 @@ export type LocalProcessorResult = {
   warning: string | null
 }
 
-type FractionWindow = {
-  key: LocalFractionKey
-  start: number
-  end: number
-}
-
-const FRACTION_KEYS: LocalFractionKey[] = ['albumina', 'alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
-const FRACTION_WINDOWS: FractionWindow[] = [
-  { key: 'albumina', start: 0.0, end: 0.35 },
-  { key: 'alfa_1', start: 0.35, end: 0.45 },
-  { key: 'alfa_2', start: 0.45, end: 0.56 },
-  { key: 'beta_1', start: 0.56, end: 0.68 },
-  { key: 'beta_2', start: 0.68, end: 0.78 },
-  { key: 'gamma', start: 0.78, end: 1.0 },
-]
-const PROJECTION_TOP_FRACTION = 0.38
-const MIN_SIGNAL_DYNAMIC_RANGE = 9
-const HIGH_VALLEY_WARNING_LEVEL = 0.34
-const GLOBAL_BASELINE_PERCENTILE = 0.05
-const RESIDUAL_BASELINE_PERCENTILE = 0.02
-const LOCAL_BASELINE_MIN_CORRELATION = 0.90
-const LOCAL_BASELINE_MAX_PEAK_SHIFT_RATIO = 0.065
-const BASELINE_WINDOW_DIVISOR = 18
-const BASELINE_WINDOW_MIN = 9
-const SMOOTHING_SIGMA_DIVISOR = 220
-const SMOOTHING_SIGMA_MIN = 1.25
-const PEAK_MIN_HEIGHT = 0.025
-const PEAK_DISTANCE_DIVISOR = 20
-const PEAK_DISTANCE_MIN = 8
-const EXPECTED_PEAK_WARNING_THRESHOLD = 4
-const CROP_WARNING_MIN_WIDTH = 80
-const CROP_WARNING_MIN_HEIGHT = 35
-const PROFILE_DOWNSAMPLE_POINTS = 700
-const ALBUMIN_TARGET_POSITION_IN_WINDOW = 0.60
-const BOUNDARY_SHIFT_LIMIT_RATIO = 0.08
-const GAUSSIAN_WIDTH_MIN_RATIO = 0.026
-const GAUSSIAN_WIDTH_SCALES = [0.7, 1.0, 1.35]
-const GAUSSIAN_FIT_ITERATIONS = 1200
-const GAUSSIAN_FIT_EPSILON = 1e-9
-const REFERENCE_VALLEY_SNAP_WINDOW_RATIO = 0.04
-const REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP = 1.25
-const REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP = 1.5
+const FRACTION_KEYS: LocalFractionKey[] = [...PROCESSOR_FRACTION_KEYS]
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
@@ -80,6 +46,23 @@ function clampRatio(value: number, min: number, max: number) {
 function roundTo(value: number, digits: number) {
   const factor = 10 ** digits
   return Math.round(value * factor) / factor
+}
+
+function buildImageGaussianKernel(kernelSize: number) {
+  if (kernelSize <= 1) return [1]
+
+  const radius = Math.floor(kernelSize / 2)
+  const sigma = 0.3 * (((kernelSize - 1) * 0.5) - 1) + 0.8
+  const kernel: number[] = []
+  let total = 0
+
+  for (let offset = -radius; offset <= radius; offset += 1) {
+    const value = Math.exp(-(offset * offset) / (2 * sigma * sigma))
+    kernel.push(value)
+    total += value
+  }
+
+  return kernel.map(value => value / total)
 }
 
 function getCanvasContext(width: number, height: number) {
@@ -197,10 +180,73 @@ function trapezoidArea(values: number[], start: number, end: number) {
   return total
 }
 
-function buildRobustProjection(data: Uint8ClampedArray, width: number, height: number, axis: 'x' | 'y') {
+function buildGrayscaleMatrix(data: Uint8ClampedArray) {
+  const grayscale = new Array<number>(Math.floor(data.length / 4))
+
+  for (let pixelIndex = 0; pixelIndex < grayscale.length; pixelIndex += 1) {
+    const channelIndex = pixelIndex * 4
+    const red = data[channelIndex]
+    const green = data[channelIndex + 1]
+    const blue = data[channelIndex + 2]
+    grayscale[pixelIndex] = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
+  }
+
+  return grayscale
+}
+
+function gaussianBlurMatrix(values: number[], width: number, height: number, kernelSize: number) {
+  if (kernelSize <= 1) return values
+
+  const kernel = buildImageGaussianKernel(kernelSize)
+  const radius = Math.floor(kernel.length / 2)
+  const horizontal = new Array<number>(values.length).fill(0)
+  const output = new Array<number>(values.length).fill(0)
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let total = 0
+      for (let offset = -radius; offset <= radius; offset += 1) {
+        const sourceX = clamp(x + offset, 0, width - 1)
+        total += values[(y * width) + sourceX] * kernel[offset + radius]
+      }
+      horizontal[(y * width) + x] = total
+    }
+  }
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let total = 0
+      for (let offset = -radius; offset <= radius; offset += 1) {
+        const sourceY = clamp(y + offset, 0, height - 1)
+        total += horizontal[(sourceY * width) + x] * kernel[offset + radius]
+      }
+      output[(y * width) + x] = total
+    }
+  }
+
+  return output
+}
+
+function prepareGrayscaleMatrix(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  calibration: ProcessorCalibrationProfile,
+) {
+  const grayscale = buildGrayscaleMatrix(data)
+  return gaussianBlurMatrix(grayscale, width, height, Math.round(calibration.gaussian_blur_kernel_size))
+}
+
+function buildRobustProjection(
+  grayscale: number[],
+  width: number,
+  height: number,
+  axis: 'x' | 'y',
+  calibration: ProcessorCalibrationProfile,
+) {
   const length = axis === 'x' ? width : height
   const crossLength = axis === 'x' ? height : width
-  const topCount = Math.max(1, Math.round(crossLength * PROJECTION_TOP_FRACTION))
+  const topCount = Math.max(1, Math.round(crossLength * calibration.projection_top_fraction))
   const profile = new Array<number>(length).fill(0)
 
   for (let primary = 0; primary < length; primary += 1) {
@@ -209,12 +255,8 @@ function buildRobustProjection(data: Uint8ClampedArray, width: number, height: n
     for (let secondary = 0; secondary < crossLength; secondary += 1) {
       const x = axis === 'x' ? primary : secondary
       const y = axis === 'x' ? secondary : primary
-      const pixelIndex = (y * width + x) * 4
-      const red = data[pixelIndex]
-      const green = data[pixelIndex + 1]
-      const blue = data[pixelIndex + 2]
-      const grayscale = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-      darknessValues.push(255 - grayscale)
+      const gray = grayscale[(y * width) + x]
+      darknessValues.push(1 - gray)
     }
 
     darknessValues.sort((left, right) => left - right)
@@ -225,11 +267,15 @@ function buildRobustProjection(data: Uint8ClampedArray, width: number, height: n
   return profile
 }
 
-function finalizeNormalizedSignal(corrected: number[]) {
-  const sigma = Math.max(SMOOTHING_SIGMA_MIN, corrected.length / SMOOTHING_SIGMA_DIVISOR)
+function finalizeNormalizedSignal(corrected: number[], calibration: ProcessorCalibrationProfile) {
+  const sigma = Math.max(calibration.smoothing_sigma_min, corrected.length / calibration.smoothing_sigma_divisor)
   const smoothed = gaussianSmooth(corrected, sigma)
-  const residualBaseline = percentile(smoothed, RESIDUAL_BASELINE_PERCENTILE)
-  const cleaned = smoothed.map(value => Math.max(0, value - residualBaseline))
+  const residualBaseline = percentile(smoothed, calibration.residual_baseline_percentile)
+  const baselineAdjusted = smoothed.map(value => Math.max(0, value - residualBaseline))
+  const maxBaselineAdjusted = Math.max(...baselineAdjusted, 0)
+  const cleaned = calibration.signal_floor > 0 && maxBaselineAdjusted > 0
+    ? baselineAdjusted.map(value => Math.max(0, value - (calibration.signal_floor * maxBaselineAdjusted)))
+    : baselineAdjusted
   const maxValue = Math.max(...cleaned, 0)
 
   if (maxValue <= 0) {
@@ -242,19 +288,19 @@ function finalizeNormalizedSignal(corrected: number[]) {
   return normalized
 }
 
-function normalizeWithGlobalBaseline(values: number[]) {
-  const baseline = percentile(values, GLOBAL_BASELINE_PERCENTILE)
-  return finalizeNormalizedSignal(values.map(value => Math.max(0, value - baseline)))
+function normalizeWithGlobalBaseline(values: number[], calibration: ProcessorCalibrationProfile) {
+  const baseline = percentile(values, calibration.global_baseline_percentile)
+  return finalizeNormalizedSignal(values.map(value => Math.max(0, value - baseline)), calibration)
 }
 
-function normalizeWithLocalBaseline(values: number[]) {
-  let window = Math.max(BASELINE_WINDOW_MIN, Math.floor(values.length / BASELINE_WINDOW_DIVISOR))
+function normalizeWithLocalBaseline(values: number[], calibration: ProcessorCalibrationProfile) {
+  let window = Math.max(calibration.baseline_window_min, Math.floor(values.length / calibration.baseline_window_divisor))
   if (window % 2 === 0) window += 1
 
   const rollingMin = minimumFilter(values, window)
   const baseline = gaussianSmooth(rollingMin, window / 2)
   const corrected = values.map((value, index) => Math.max(0, value - baseline[index]))
-  return finalizeNormalizedSignal(corrected)
+  return finalizeNormalizedSignal(corrected, calibration)
 }
 
 function findPeakIndex(values: number[], start: number, end: number) {
@@ -273,11 +319,15 @@ function findPeakIndex(values: number[], start: number, end: number) {
   return peakIndex
 }
 
-function localBaselinePreservesShape(rawProfile: number[], normalizedProfile: number[]) {
+function localBaselinePreservesShape(
+  rawProfile: number[],
+  normalizedProfile: number[],
+  calibration: ProcessorCalibrationProfile,
+) {
   const maxIndex = Math.max(rawProfile.length - 1, 1)
   const rawPeakIndex = findPeakIndex(rawProfile, 0, rawProfile.length - 1)
   const normalizedPeakIndex = findPeakIndex(normalizedProfile, 0, normalizedProfile.length - 1)
-  const maxPeakShift = Math.max(3, Math.round(maxIndex * LOCAL_BASELINE_MAX_PEAK_SHIFT_RATIO))
+  const maxPeakShift = Math.max(3, Math.round(maxIndex * calibration.local_baseline_max_peak_shift_ratio))
 
   if (Math.abs(rawPeakIndex - normalizedPeakIndex) > maxPeakShift) {
     return false
@@ -290,35 +340,35 @@ function localBaselinePreservesShape(rawProfile: number[], normalizedProfile: nu
   }
 
   const correlation = pearsonCorrelation(rawProfile, normalizedProfile)
-  return Number.isFinite(correlation) && correlation >= LOCAL_BASELINE_MIN_CORRELATION
+  return Number.isFinite(correlation) && correlation >= calibration.local_baseline_min_correlation
 }
 
-function normalizeSignal(rawProfile: number[]) {
+function normalizeSignal(rawProfile: number[], calibration: ProcessorCalibrationProfile) {
   if (rawProfile.length < 4) {
     throw new Error('La imagen recortada es demasiado chica para extraer un densitograma.')
   }
 
   const dynamicRange = percentile(rawProfile, 0.98) - percentile(rawProfile, 0.02)
-  if (dynamicRange < MIN_SIGNAL_DYNAMIC_RANGE) {
+  if (dynamicRange < calibration.min_signal_dynamic_range) {
     throw new Error('La imagen no contiene suficiente contraste para extraer una senal util.')
   }
 
-  const globalNormalized = normalizeWithGlobalBaseline(rawProfile)
-  const localNormalized = normalizeWithLocalBaseline(rawProfile)
+  const globalNormalized = normalizeWithGlobalBaseline(rawProfile, calibration)
+  const localNormalized = normalizeWithLocalBaseline(rawProfile, calibration)
 
-  if (localBaselinePreservesShape(rawProfile, localNormalized)) {
+  if (localBaselinePreservesShape(rawProfile, localNormalized, calibration)) {
     return localNormalized
   }
 
   return globalNormalized
 }
 
-function detectLocalMaxima(values: number[]) {
-  const minDistance = Math.max(PEAK_DISTANCE_MIN, Math.floor(values.length / PEAK_DISTANCE_DIVISOR))
+function detectLocalMaxima(values: number[], calibration: ProcessorCalibrationProfile) {
+  const minDistance = Math.max(calibration.peak_distance_min, Math.floor(values.length / calibration.peak_distance_divisor))
   const candidates: number[] = []
 
   for (let index = 1; index < values.length - 1; index += 1) {
-    if (values[index] >= values[index - 1] && values[index] > values[index + 1] && values[index] >= PEAK_MIN_HEIGHT) {
+    if (values[index] >= values[index - 1] && values[index] > values[index + 1] && values[index] >= calibration.peak_prominence) {
       candidates.push(index)
     }
   }
@@ -387,12 +437,18 @@ function measureTargetError(values: number[], boundaries: number[], targetPercen
   }
 }
 
-function findNearestReferenceValley(values: number[], targetIndex: number, minAllowed: number, maxAllowed: number) {
+function findNearestReferenceValley(
+  values: number[],
+  targetIndex: number,
+  minAllowed: number,
+  maxAllowed: number,
+  calibration: ProcessorCalibrationProfile,
+) {
   const maxIndex = Math.max(0, values.length - 1)
   const safeMin = clamp(minAllowed, 0, maxIndex)
   const safeMax = clamp(maxAllowed, safeMin, maxIndex)
   const safeTarget = clamp(targetIndex, safeMin, safeMax)
-  const radius = Math.max(2, Math.round(maxIndex * REFERENCE_VALLEY_SNAP_WINDOW_RATIO))
+  const radius = Math.max(2, Math.round(maxIndex * calibration.reference_valley_snap_window_ratio))
   const start = Math.max(safeMin, safeTarget - radius)
   const end = Math.min(safeMax, safeTarget + radius)
 
@@ -425,31 +481,39 @@ function findNearestReferenceValley(values: number[], targetIndex: number, minAl
   return bestIndex
 }
 
-function estimateProfileShiftRatio(values: number[]) {
+function estimateProfileShiftRatio(values: number[], fractionWindows: ProcessorFractionWindow[], calibration: ProcessorCalibrationProfile) {
   const maxIndex = Math.max(values.length - 1, 1)
-  const albuminWindow = FRACTION_WINDOWS[0]
-  const searchEndRatio = FRACTION_WINDOWS[Math.min(1, FRACTION_WINDOWS.length - 1)].end
+  const albuminWindow = fractionWindows[0]
+  const searchEndRatio = fractionWindows[Math.min(1, fractionWindows.length - 1)].end
   const observedPeak = findPeakIndex(values, 0, Math.round(searchEndRatio * maxIndex))
   const observedPeakRatio = observedPeak / maxIndex
-  const expectedPeakRatio = albuminWindow.start + ((albuminWindow.end - albuminWindow.start) * ALBUMIN_TARGET_POSITION_IN_WINDOW)
-  return clampRatio(observedPeakRatio - expectedPeakRatio, -BOUNDARY_SHIFT_LIMIT_RATIO, BOUNDARY_SHIFT_LIMIT_RATIO)
+  const expectedPeakRatio = albuminWindow.start + ((albuminWindow.end - albuminWindow.start) * calibration.albumin_target_position_in_window)
+  return clampRatio(
+    observedPeakRatio - expectedPeakRatio,
+    -calibration.boundary_shift_limit_ratio,
+    calibration.boundary_shift_limit_ratio,
+  )
 }
 
-function fitFractionTargetPercentages(values: number[]) {
+function fitFractionTargetPercentages(
+  values: number[],
+  fractionWindows: ProcessorFractionWindow[],
+  calibration: ProcessorCalibrationProfile,
+) {
   const xAxis = values.map((_, index) => (
     values.length <= 1 ? 0 : index / (values.length - 1)
   ))
-  const profileShiftRatio = estimateProfileShiftRatio(values)
+  const profileShiftRatio = estimateProfileShiftRatio(values, fractionWindows, calibration)
   const basisColumns: number[][] = []
   const basisOwners: number[] = []
   const basisAreas: number[] = []
 
-  FRACTION_WINDOWS.forEach((window, fractionIndex) => {
+  fractionWindows.forEach((window, fractionIndex) => {
     const center = clampRatio(((window.start + window.end) / 2) + profileShiftRatio, 0, 1)
-    const baseWidth = Math.max((window.end - window.start) / 3.2, GAUSSIAN_WIDTH_MIN_RATIO)
+    const baseWidth = Math.max((window.end - window.start) / 3.2, calibration.gaussian_width_min_ratio)
 
-    GAUSSIAN_WIDTH_SCALES.forEach(scale => {
-      const sigma = Math.max(baseWidth * scale, GAUSSIAN_WIDTH_MIN_RATIO * 0.6)
+    calibration.gaussian_width_scales.forEach(scale => {
+      const sigma = Math.max(baseWidth * scale, calibration.gaussian_width_min_ratio * 0.6)
       const basis = xAxis.map(x => Math.exp(-0.5 * (((x - center) / sigma) ** 2)))
       basisColumns.push(basis)
       basisOwners.push(fractionIndex)
@@ -463,7 +527,7 @@ function fitFractionTargetPercentages(values: number[]) {
 
   const weights = new Array<number>(basisColumns.length).fill(0.1)
 
-  for (let iteration = 0; iteration < GAUSSIAN_FIT_ITERATIONS; iteration += 1) {
+  for (let iteration = 0; iteration < calibration.gaussian_fit_iterations; iteration += 1) {
     const reconstruction = new Array<number>(values.length).fill(0)
 
     for (let columnIndex = 0; columnIndex < basisColumns.length; columnIndex += 1) {
@@ -477,7 +541,7 @@ function fitFractionTargetPercentages(values: number[]) {
     for (let columnIndex = 0; columnIndex < basisColumns.length; columnIndex += 1) {
       const column = basisColumns[columnIndex]
       let numerator = 0
-      let denominator = GAUSSIAN_FIT_EPSILON
+      let denominator = calibration.gaussian_fit_epsilon
 
       for (let sampleIndex = 0; sampleIndex < values.length; sampleIndex += 1) {
         numerator += column[sampleIndex] * values[sampleIndex]
@@ -501,11 +565,15 @@ function fitFractionTargetPercentages(values: number[]) {
   return fractionAreas.map(area => (area / totalArea) * 100)
 }
 
-function buildBoundaries(values: number[]) {
+function buildBoundaries(
+  values: number[],
+  fractionWindows: ProcessorFractionWindow[],
+  calibration: ProcessorCalibrationProfile,
+) {
   const sampleCount = values.length
   const maxIndex = Math.max(values.length - 1, 0)
   const totalArea = trapezoidArea(values, 0, maxIndex)
-  const targetPercentages = fitFractionTargetPercentages(values)
+  const targetPercentages = fitFractionTargetPercentages(values, fractionWindows, calibration)
 
   if (totalArea <= 0) {
     return normalizeBoundaryIndices(
@@ -550,18 +618,19 @@ function buildBoundaries(values: number[]) {
   for (let index = 1; index < snapped.length - 1; index += 1) {
     snapped[index] = findNearestReferenceValley(
       values,
-      snapped[index],
-      snapped[index - 1] + minGap,
-      snapped[index + 1] - minGap,
-    )
+        snapped[index],
+        snapped[index - 1] + minGap,
+        snapped[index + 1] - minGap,
+        calibration,
+      )
   }
 
   const areaOnlyError = measureTargetError(values, areaOnly, targetPercentages)
   const snappedError = measureTargetError(values, snapped, targetPercentages)
 
   if (
-    snappedError.maxError > REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP ||
-    snappedError.totalError > areaOnlyError.totalError + REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP
+    snappedError.maxError > calibration.reference_max_fraction_error_after_snap ||
+    snappedError.totalError > areaOnlyError.totalError + calibration.reference_max_total_error_increase_after_snap
   ) {
     return areaOnly
   }
@@ -569,7 +638,7 @@ function buildBoundaries(values: number[]) {
   return normalizeBoundaryIndices(snapped, sampleCount)
 }
 
-function downsampleProfile(values: number[], maxPoints = PROFILE_DOWNSAMPLE_POINTS) {
+function downsampleProfile(values: number[], maxPoints: number) {
   if (values.length <= maxPoints) {
     return values.map((value, index) => ({
       x: values.length === 1 ? 0 : index / (values.length - 1),
@@ -620,7 +689,9 @@ export async function processElectrophoresisImage(input: {
   imageUrl: string
   crop?: CropPayload | null
   totalConcentration?: number | null
+  calibration?: ProcessorCalibrationProfile | null
 }): Promise<LocalProcessorResult> {
+  const calibration = input.calibration ?? getBundledProcessorCalibration()
   const image = await loadImageData(input.imageUrl)
   const cropRect = buildCropRect(input.crop, image.width, image.height)
   const fullCanvas = getCanvasContext(image.width, image.height)
@@ -630,10 +701,11 @@ export async function processElectrophoresisImage(input: {
 
   const croppedData = fullCanvas.context.getImageData(cropRect.left, cropRect.top, cropRect.width, cropRect.height)
   const axis: 'x' | 'y' = cropRect.width >= cropRect.height ? 'x' : 'y'
-  const rawProfile = buildRobustProjection(croppedData.data, cropRect.width, cropRect.height, axis)
-  const normalizedProfile = normalizeSignal(rawProfile)
-  const detectedPeaks = detectLocalMaxima(normalizedProfile)
-  const boundaries = buildBoundaries(normalizedProfile)
+  const grayscale = prepareGrayscaleMatrix(croppedData.data, cropRect.width, cropRect.height, calibration)
+  const rawProfile = buildRobustProjection(grayscale, cropRect.width, cropRect.height, axis, calibration)
+  const normalizedProfile = normalizeSignal(rawProfile, calibration)
+  const detectedPeaks = detectLocalMaxima(normalizedProfile, calibration)
+  const boundaries = buildBoundaries(normalizedProfile, calibration.fraction_windows, calibration)
   const valleys = boundaries.slice(1, -1)
   const totalArea = trapezoidArea(normalizedProfile, boundaries[0], boundaries[boundaries.length - 1])
 
@@ -641,7 +713,7 @@ export async function processElectrophoresisImage(input: {
     throw new Error('No fue posible integrar una senal valida para el estudio.')
   }
 
-  const fractions = FRACTION_WINDOWS.reduce<Record<LocalFractionKey, LocalFractionResult>>((accumulator, window, index) => {
+  const fractions = calibration.fraction_windows.reduce<Record<LocalFractionKey, LocalFractionResult>>((accumulator, window, index) => {
     const start = boundaries[index]
     const end = boundaries[index + 1]
     const area = trapezoidArea(normalizedProfile, start, end)
@@ -670,13 +742,13 @@ export async function processElectrophoresisImage(input: {
   })
 
   const warningParts = ['Motor local v3.6 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
-  if (cropRect.width < CROP_WARNING_MIN_WIDTH || cropRect.height < CROP_WARNING_MIN_HEIGHT) {
+  if (cropRect.width < calibration.crop_warning_min_width || cropRect.height < calibration.crop_warning_min_height) {
     warningParts.push('El recorte es pequeno y puede degradar la estimacion.')
   }
-  if (detectedPeaks.length < EXPECTED_PEAK_WARNING_THRESHOLD) {
+  if (detectedPeaks.length < calibration.expected_peak_warning_threshold) {
     warningParts.push('Se detectaron pocos picos; revisar imagen y parametros.')
   }
-  if (valleys.some(index => normalizedProfile[index] >= HIGH_VALLEY_WARNING_LEVEL)) {
+  if (valleys.some(index => normalizedProfile[index] >= calibration.high_valley_warning_level)) {
     warningParts.push('Uno o mas separadores caen en valles poco definidos; revisar posiciones manualmente.')
   }
 
@@ -690,7 +762,7 @@ export async function processElectrophoresisImage(input: {
     valleys,
     total_area: roundTo(totalArea, 4),
     profile_signal: normalizedProfile.map(value => roundTo(value, 6)),
-    profile: downsampleProfile(normalizedProfile),
+    profile: downsampleProfile(normalizedProfile, calibration.profile_downsample_points),
     fractions,
     warning: warningParts.join(' '),
   }

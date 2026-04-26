@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.calibration import get_calibration
+from app.calibration import ProcessorCalibration, get_calibration, reload_calibration
 from app.processor import process_electrophoresis_image
 from app.synthetic_cases import build_synthetic_signal, encode_png, render_signal_to_image, synthetic_cases
 from app.schemas import FractionKey, ProcessAnalysisResponse
@@ -107,3 +109,36 @@ class ProcessorSyntheticCalibrationTests(unittest.TestCase):
         self.assertLess(max(beta1_values) - min(beta1_values), 1.0)
         self.assertLess(max(beta2_values) - min(beta2_values), 1.0)
         self.assertLess(max(gamma_values) - min(gamma_values), 1.0)
+
+
+class CalibrationReloadTests(unittest.TestCase):
+    def test_get_calibration_refreshes_when_file_changes(self) -> None:
+        default_payload_path = BACKEND_ROOT / "app" / "default_calibration.json"
+        payload = json.loads(default_payload_path.read_text(encoding="utf-8"))
+        updated_payload = dict(payload)
+        updated_payload["profile_version"] = "test-auto-reload"
+        initial_calibration = ProcessorCalibration.model_validate(payload)
+        updated_calibration = ProcessorCalibration.model_validate(updated_payload)
+
+        try:
+            with patch("app.calibration.resolve_calibration_path", return_value=Path("virtual-calibration.json")), patch(
+                "app.calibration._build_cache_key",
+                side_effect=[
+                    ("virtual-calibration.json", 1),
+                    ("virtual-calibration.json", 1),
+                    ("virtual-calibration.json", 2),
+                ],
+            ), patch(
+                "app.calibration.load_calibration",
+                side_effect=[initial_calibration, updated_calibration],
+            ):
+                initial = reload_calibration()
+                self.assertEqual(initial.profile_version, payload["profile_version"])
+
+                stable = get_calibration()
+                self.assertEqual(stable.profile_version, payload["profile_version"])
+
+                refreshed = get_calibration()
+                self.assertEqual(refreshed.profile_version, "test-auto-reload")
+        finally:
+            reload_calibration()

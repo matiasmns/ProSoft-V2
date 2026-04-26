@@ -1,13 +1,49 @@
+import { useEffect, useState } from 'react'
 import { UserCircle, Home } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
 
-type Props = {
-  name: string
-  role: string
+const defaultProfile = {
+  name: 'Usuario',
+  role: '',
 }
 
-export default function TopBar({ name, role }: Props) {
+export default function TopBar() {
   const navigate = useNavigate()
+  const [profile, setProfile] = useState(defaultProfile)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadProfile() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!active || !user) return
+
+      const fallbackName = user.email?.split('@')[0] || defaultProfile.name
+      const { data, error } = await supabase
+        .from('profile')
+        .select('name, role')
+        .eq('id', user.id)
+        .maybeSingle()
+
+      if (error) {
+        console.warn('No se pudo leer el perfil del usuario en Supabase.', error.message)
+      }
+
+      if (!active) return
+
+      setProfile({
+        name: data?.name || fallbackName,
+        role: data?.role || defaultProfile.role,
+      })
+    }
+
+    void loadProfile()
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   return (
     <header
@@ -21,11 +57,13 @@ export default function TopBar({ name, role }: Props) {
         <UserCircle size={36} style={{ color: '#5C894A' }} />
         <div className="text-left">
           <p className="text-sm font-semibold leading-tight" style={{ color: '#54585E' }}>
-            {name}
+            {profile.name}
           </p>
-          <p className="text-xs leading-tight" style={{ color: '#94BB66' }}>
-            {role}
-          </p>
+          {profile.role && (
+            <p className="text-xs leading-tight" style={{ color: '#94BB66' }}>
+              {profile.role}
+            </p>
+          )}
         </div>
       </div>
 
@@ -41,7 +79,7 @@ export default function TopBar({ name, role }: Props) {
         onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
       >
         <Home size={13} />
-        Menú Principal
+        Menu Principal
       </button>
     </header>
   )
