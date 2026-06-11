@@ -904,6 +904,53 @@ function applySebiaAgaroseGuardrails(
   }
 }
 
+function applySebiaCapillaryGuardrails(
+  values: number[],
+  boundaries: number[],
+  calibration: ProcessorCalibrationProfile,
+) {
+  const maxIndex = Math.max(values.length - 1, 1)
+  let nextBoundaries = normalizeBoundaryIndices(boundaries, values.length)
+  const adjustments: string[] = []
+
+  const readMetrics = (currentBoundaries: number[]) => ({
+    percentages: buildAreaPercentages(values, currentBoundaries),
+    separatorPercentages: currentBoundaries
+      .slice(1, -1)
+      .map(index => (index / maxIndex) * 100),
+  })
+
+  let { percentages, separatorPercentages } = readMetrics(nextBoundaries)
+  let [albumina, alfa1, , beta1, beta2, gamma] = percentages
+  let [sep1, , , sep4, sep5] = separatorPercentages
+
+  if (albumina <= 54 && alfa1 >= 6.5 && sep1 <= 52.5) {
+    nextBoundaries = applyBoundaryTargets(values, nextBoundaries, calibration, { 1: 0.536, 2: 0.551 })
+    adjustments.push('Guardarrail SEBIA capilar: correccion Albumina/Alfa.')
+    ;({ percentages, separatorPercentages } = readMetrics(nextBoundaries))
+    ;[albumina, alfa1, , beta1, beta2, gamma] = percentages
+    ;[sep1, , , sep4, sep5] = separatorPercentages
+  }
+
+  if (beta1 >= 9 && beta2 <= 4.5 && sep4 >= 82) {
+    nextBoundaries = applyBoundaryTargets(values, nextBoundaries, calibration, { 3: 0.707, 4: 0.760, 5: 0.878 })
+    adjustments.push('Guardarrail SEBIA capilar: correccion zona Alfa 2/Beta/Gamma.')
+    ;({ percentages, separatorPercentages } = readMetrics(nextBoundaries))
+    ;[albumina, alfa1, , beta1, beta2, gamma] = percentages
+    ;[sep1, , , sep4, sep5] = separatorPercentages
+  }
+
+  if (gamma <= 9 && sep5 >= 90) {
+    nextBoundaries = applyBoundaryTargets(values, nextBoundaries, calibration, { 5: 0.878 })
+    adjustments.push('Guardarrail SEBIA capilar: correccion borde Gamma.')
+  }
+
+  return {
+    boundaries: normalizeBoundaryIndices(nextBoundaries, values.length),
+    adjustments,
+  }
+}
+
 function applyEquipmentGuardrails(
   values: number[],
   boundaries: number[],
@@ -912,6 +959,9 @@ function applyEquipmentGuardrails(
 ) {
   if (equipmentProfile.usesSebiaAgaroseGuardrails) {
     return applySebiaAgaroseGuardrails(values, boundaries, calibration)
+  }
+  if (equipmentProfile.key === 'sebia_capillary_image') {
+    return applySebiaCapillaryGuardrails(values, boundaries, calibration)
   }
 
   return {
@@ -1033,7 +1083,7 @@ export async function processElectrophoresisImage(input: {
     gamma: { start: 0, end: 0, peak_index: 0, area: 0, percentage: 0, concentration: null },
   })
 
-  const warningParts = ['Motor local v3.7 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  const warningParts = ['Motor local v3.8 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
   if (equipmentProfile.usesSebiaAgaroseGuardrails) {
     warningParts.push(`Perfil de equipo activo: ${equipmentProfile.label}.`)
   }

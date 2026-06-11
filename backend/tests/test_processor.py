@@ -150,6 +150,18 @@ class ProcessorSyntheticCalibrationTests(unittest.TestCase):
         self.assertEqual(response.equipment_profile, "sebia_capillary_image")
         self.assertIn("capilar", (response.warning or "").lower())
 
+    def test_unspecified_sebia_does_not_fallback_to_agarose_guardrails(self) -> None:
+        payload = encode_png(render_signal_to_image(build_synthetic_signal(self.synthetic_case_map["normal_reference"], self.calibration)))
+        response = process_electrophoresis_image(
+            payload,
+            total_concentration=6.8,
+            equipment_origin="SEBIA",
+            equipment_model="",
+            calibration=self.calibration,
+        )
+        self.assertEqual(response.equipment_profile, "generic_image")
+        self.assertIn("sin guardrails", response.equipment_profile_label or "")
+
 
 class CalibrationReloadTests(unittest.TestCase):
     def test_get_calibration_refreshes_when_file_changes(self) -> None:

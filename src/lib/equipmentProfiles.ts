@@ -54,12 +54,12 @@ export function resolveProcessingEquipmentProfile(
 
   if (isSebia) {
     return {
-      key: 'sebia_agarose_image',
-      label: 'SEBIA no especificado (fallback gel/agarosa)',
+      key: 'generic_image',
+      label: 'SEBIA no especificado (sin guardrails de metodo)',
       origin: origin?.trim() || null,
       model: model?.trim() || null,
-      usesSebiaAgaroseGuardrails: true,
-      prefersCurveInput: false,
+      usesSebiaAgaroseGuardrails: false,
+      prefersCurveInput: true,
     }
   }
 

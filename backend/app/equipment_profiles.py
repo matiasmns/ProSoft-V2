@@ -54,11 +54,11 @@ def resolve_equipment_profile(origin: str | None, model: str | None) -> Equipmen
 
     if is_sebia:
         return EquipmentProfileResolution(
-            key=SEBIA_AGAROSE_IMAGE_PROFILE_KEY,
-            label="SEBIA no especificado (fallback gel/agarosa)",
+            key=GENERIC_IMAGE_PROFILE_KEY,
+            label="SEBIA no especificado (sin guardrails de metodo)",
             origin=origin,
             model=model,
-            uses_sebia_agarose_guardrails=True,
+            prefers_curve_input=True,
         )
 
     return EquipmentProfileResolution(

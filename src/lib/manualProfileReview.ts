@@ -11,6 +11,9 @@ export type ReviewSeparatorView = ReviewSeparatorDefinition & {
   index: number
   x: number
   y: number
+  isLocalMinimum: boolean
+  valleyDepth: number
+  warning: string | null
 }
 
 export type ManualReviewData = {
@@ -27,6 +30,8 @@ const MIN_SEPARATOR_COUNT = FRACTION_KEYS.length + 1
 const REFERENCE_VALLEY_SNAP_WINDOW_RATIO = 0.04
 const REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP = 1.25
 const REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP = 1.5
+const REVIEW_HIGH_VALLEY_WARNING_LEVEL = 0.34
+const REVIEW_LOW_VALLEY_DEPTH_WARNING = 0.035
 
 export const REVIEW_SEPARATOR_DEFS: ReviewSeparatorDefinition[] = [
   { id: 'inicio', label: 'Inicio', color: '#D64545' },
@@ -60,26 +65,34 @@ function readAnalysisSampleCount(result: LocalProcessorResult) {
   return Math.max(1, readAnalysisValues(result).length)
 }
 
-function interpolateProfileY(profile: LocalProcessorResult['profile'], ratio: number) {
-  if (profile.length === 0) return 0
-  const safeRatio = clamp(ratio, 0, 1)
-  const first = profile[0]
-  const last = profile[profile.length - 1]
-  if (safeRatio <= first.x) return first.y
-  if (safeRatio >= last.x) return last.y
+function readSignalValue(values: number[], index: number) {
+  if (values.length === 0) return 0
+  const safeIndex = clamp(index, 0, values.length - 1)
+  return values[safeIndex] ?? 0
+}
 
-  for (let index = 1; index < profile.length; index += 1) {
-    const previous = profile[index - 1]
-    const current = profile[index]
-    if (safeRatio > current.x) continue
+function analyzeValley(values: number[], index: number) {
+  const current = readSignalValue(values, index)
+  const previous = readSignalValue(values, index - 1)
+  const next = readSignalValue(values, index + 1)
+  const outerPrevious = readSignalValue(values, index - 2)
+  const outerNext = readSignalValue(values, index + 2)
+  const isLocalMinimum = current <= previous && current <= next
+  const valleyDepth = Math.max(0, Math.max(previous, outerPrevious) - current) + Math.max(0, Math.max(next, outerNext) - current)
 
-    const span = current.x - previous.x
-    if (span <= 0) return current.y
-    const localRatio = (safeRatio - previous.x) / span
-    return previous.y + ((current.y - previous.y) * localRatio)
+  return {
+    current,
+    isLocalMinimum,
+    valleyDepth,
   }
+}
 
-  return last.y
+function buildSeparatorWarning(isLocked: boolean, y: number, isLocalMinimum: boolean, valleyDepth: number) {
+  if (isLocked) return null
+  if (!isLocalMinimum) return 'El separador no cae en un minimo local real.'
+  if (y >= REVIEW_HIGH_VALLEY_WARNING_LEVEL) return 'El separador cae en un valle poco profundo.'
+  if (valleyDepth < REVIEW_LOW_VALLEY_DEPTH_WARNING) return 'El minimo es debil y puede ser inestable.'
+  return null
 }
 
 function trapezoidArea(values: number[], start: number, end: number) {
@@ -131,12 +144,16 @@ function findNearestReferenceValley(values: number[], targetIndex: number, minAl
     const previous = values[index - 1] ?? values[index]
     const current = values[index] ?? Number.POSITIVE_INFINITY
     const next = values[index + 1] ?? values[index]
+    const outerPrevious = values[index - 2] ?? previous
+    const outerNext = values[index + 2] ?? next
     const isLocalMinimum = current <= previous && current <= next
 
     if (!isLocalMinimum && foundLocalMinimum) continue
 
-    const distancePenalty = (Math.abs(index - safeTarget) / Math.max(radius, 1)) * 0.025
-    const score = current + distancePenalty
+    const localDepth = Math.max(0, Math.max(previous, outerPrevious) - current) + Math.max(0, Math.max(next, outerNext) - current)
+    const distancePenalty = (Math.abs(index - safeTarget) / Math.max(radius, 1)) * 0.03
+    const valleyBonus = Math.min(localDepth, 1) * 0.18
+    const score = current + distancePenalty - valleyBonus
 
     if (isLocalMinimum && !foundLocalMinimum) {
       foundLocalMinimum = true
@@ -299,17 +316,7 @@ export function snapSeparatorRatio(
   const minAllowed = separatorIndex === 0 ? 0 : indices[separatorIndex - 1] + minGap
   const maxAllowed = separatorIndex === indices.length - 1 ? maxIndex : indices[separatorIndex + 1] - minGap
   const targetIndex = clamp(Math.round(clamp(targetRatio, 0, 1) * maxIndex), minAllowed, maxAllowed)
-
-  const radius = Math.max(2, Math.floor(sampleCount / 40))
-  let snappedIndex = targetIndex
-  let snappedValue = values[targetIndex] ?? 0
-
-  for (let index = Math.max(minAllowed, targetIndex - radius); index <= Math.min(maxAllowed, targetIndex + radius); index += 1) {
-    if (values[index] <= snappedValue) {
-      snappedValue = values[index]
-      snappedIndex = index
-    }
-  }
+  const snappedIndex = findNearestReferenceValley(values, targetIndex, minAllowed, maxAllowed)
 
   const nextIndices = [...indices]
   nextIndices[separatorIndex] = snappedIndex
@@ -330,12 +337,18 @@ export function buildManualReviewData(
 
   const separators = REVIEW_SEPARATOR_DEFS.map((definition, index) => {
     const ratio = separatorRatios[index]
+    const signalIndex = separatorIndices[index]
+    const isLocked = index === 0 || index === REVIEW_SEPARATOR_DEFS.length - 1
+    const valley = analyzeValley(values, signalIndex)
     return {
       ...definition,
       ratio,
-      index: separatorIndices[index],
+      index: signalIndex,
       x: ratio,
-      y: interpolateProfileY(result.profile, ratio),
+      y: valley.current,
+      isLocalMinimum: isLocked ? true : valley.isLocalMinimum,
+      valleyDepth: isLocked ? 0 : roundTo(valley.valleyDepth, 6),
+      warning: buildSeparatorWarning(isLocked, valley.current, valley.isLocalMinimum, valley.valleyDepth),
     }
   })
 

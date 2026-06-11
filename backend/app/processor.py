@@ -15,7 +15,7 @@ from .equipment_profiles import (
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.7-axis-quality-boundary-refine"
+ALGORITHM_VERSION = "fastapi-opencv-v3.8-capillary-guardrails"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
@@ -638,6 +638,63 @@ def apply_sebia_agarose_guardrails(
     return normalize_boundary_indices(next_boundaries, signal.size), adjustments
 
 
+def apply_sebia_capillary_guardrails(
+    signal: np.ndarray,
+    boundaries: list[int],
+    calibration: ProcessorCalibration,
+) -> tuple[list[int], list[str]]:
+    max_index = max(signal.size - 1, 1)
+    next_boundaries = normalize_boundary_indices(list(boundaries), signal.size)
+    adjustments: list[str] = []
+
+    def read_metrics(current_boundaries: list[int]) -> tuple[list[float], list[float]]:
+        percentages = build_area_percentages(signal, current_boundaries)
+        separator_percentages = [
+            (current_boundaries[index] / max_index) * 100.0
+            for index in range(1, len(current_boundaries) - 1)
+        ]
+        return percentages, separator_percentages
+
+    percentages, separator_percentages = read_metrics(next_boundaries)
+    albumina, alfa_1, alfa_2, beta_1, beta_2, gamma = percentages
+    sep_1, sep_2, sep_3, sep_4, sep_5 = separator_percentages
+
+    if albumina <= 54.0 and alfa_1 >= 6.5 and sep_1 <= 52.5:
+        next_boundaries = apply_boundary_targets(
+            signal,
+            next_boundaries,
+            calibration,
+            {1: 0.536, 2: 0.551},
+        )
+        adjustments.append("Guardarrail SEBIA capilar: correccion Albumina/Alfa.")
+        percentages, separator_percentages = read_metrics(next_boundaries)
+        albumina, alfa_1, alfa_2, beta_1, beta_2, gamma = percentages
+        sep_1, sep_2, sep_3, sep_4, sep_5 = separator_percentages
+
+    if beta_1 >= 9.0 and beta_2 <= 4.5 and sep_4 >= 82.0:
+        next_boundaries = apply_boundary_targets(
+            signal,
+            next_boundaries,
+            calibration,
+            {3: 0.707, 4: 0.760, 5: 0.878},
+        )
+        adjustments.append("Guardarrail SEBIA capilar: correccion zona Alfa 2/Beta/Gamma.")
+        percentages, separator_percentages = read_metrics(next_boundaries)
+        albumina, alfa_1, alfa_2, beta_1, beta_2, gamma = percentages
+        sep_1, sep_2, sep_3, sep_4, sep_5 = separator_percentages
+
+    if gamma <= 9.0 and sep_5 >= 90.0:
+        next_boundaries = apply_boundary_targets(
+            signal,
+            next_boundaries,
+            calibration,
+            {5: 0.878},
+        )
+        adjustments.append("Guardarrail SEBIA capilar: correccion borde Gamma.")
+
+    return normalize_boundary_indices(next_boundaries, signal.size), adjustments
+
+
 def apply_equipment_guardrails(
     signal: np.ndarray,
     boundaries: list[int],
@@ -646,6 +703,8 @@ def apply_equipment_guardrails(
 ) -> tuple[list[int], list[str]]:
     if equipment_profile.key == SEBIA_AGAROSE_IMAGE_PROFILE_KEY:
         return apply_sebia_agarose_guardrails(signal, boundaries, calibration)
+    if equipment_profile.key == SEBIA_CAPILLARY_IMAGE_PROFILE_KEY:
+        return apply_sebia_capillary_guardrails(signal, boundaries, calibration)
     return normalize_boundary_indices(boundaries, signal.size), []
 
 
@@ -661,7 +720,7 @@ def build_warnings(
     equipment_adjustments: list[str],
 ) -> list[str]:
     warnings: list[str] = []
-    warnings.append("Motor v3.7 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+    warnings.append("Motor v3.8 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
 
     if equipment_profile.key == SEBIA_AGAROSE_IMAGE_PROFILE_KEY:
         warnings.append(f"Perfil de equipo activo: {equipment_profile.label}.")

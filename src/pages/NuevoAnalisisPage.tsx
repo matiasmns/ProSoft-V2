@@ -698,6 +698,25 @@ function buildDensitogramDisplayY(y: number, index: number, lastIndex: number) {
   return Math.min(Math.max(y, 0), 1)
 }
 
+function buildAnalysisChartProfile(result: LocalProcessorResult): LocalProcessorResult['profile'] {
+  const signal = Array.isArray(result.profile_signal)
+    ? result.profile_signal.filter((value): value is number => Number.isFinite(value))
+    : []
+
+  if (signal.length > 1) {
+    const denominator = Math.max(signal.length - 1, 1)
+    return signal.map((y, index) => ({
+      x: index / denominator,
+      y: Math.min(Math.max(y, 0), 1),
+    }))
+  }
+
+  return result.profile.map(point => ({
+    x: point.x,
+    y: Math.min(Math.max(point.y, 0), 1),
+  }))
+}
+
 function buildDensitogramDisplayProfile(profile: LocalProcessorResult['profile']) {
   const lastIndex = Math.max(profile.length - 1, 0)
   return profile.map((point, index) => ({
@@ -818,6 +837,9 @@ function ProfileChart({
   const hasManualAdjustments = review.separatorRatios.some((ratio, index) => (
     Math.abs(ratio - (defaultRatios[index] ?? 0)) > 0.0005
   ))
+  const minimumIssuesCount = review.separators.filter((separator, index) => (
+    index > 0 && index < review.separators.length - 1 && Boolean(separator.warning)
+  )).length
   const selectedSeparatorLocked = selectedSeparatorIndex === 0 || selectedSeparatorIndex === review.separators.length - 1
 
   const chartTitle = meta.source === 'backend_fastapi' ? 'Perfil procesado' : 'Perfil estimado'
@@ -825,7 +847,8 @@ function ProfileChart({
     ? `Procesado con ${processorSourceLabel(meta.source)}${meta.calibrationProfile ? ` (${meta.calibrationProfile}${meta.calibrationVersion ? ` ${meta.calibrationVersion}` : ''})` : ''}. Requiere revision profesional.`
     : 'Procesamiento local preliminar. Requiere revision profesional.'
 
-  const displayProfile = buildDensitogramDisplayProfile(result.profile)
+  const analysisProfile = buildAnalysisChartProfile(result)
+  const displayProfile = buildDensitogramDisplayProfile(analysisProfile)
   const points = displayProfile.map(point => `${(plotLeft + point.x * plotWidth).toFixed(1)},${(plotBottom - point.y * plotHeight).toFixed(1)}`).join(' ')
 
   function toSvgRatio(event: React.PointerEvent<SVGSVGElement | SVGLineElement | SVGCircleElement>) {
@@ -861,6 +884,12 @@ function ProfileChart({
         <span className="text-xs font-semibold" style={{ color: '#5C894A' }}>{chartTitle}</span>
         <div className="flex items-center gap-2 text-[11px]" style={{ color: '#54585E' }}>
           <span>{result.detected_peaks} picos</span>
+          <span>{review.separators.length - 2} separadores</span>
+          {minimumIssuesCount > 0 && (
+            <span className="rounded-full px-2 py-1 font-semibold" style={{ background: '#FEF2F2', color: '#C0392B' }}>
+              {minimumIssuesCount} minimos con alerta
+            </span>
+          )}
           {hasManualAdjustments && (
             <span className="rounded-full px-2 py-1 font-semibold" style={{ background: '#F0FDF4', color: '#15803D' }}>
               Revision manual activa
@@ -917,7 +946,7 @@ function ProfileChart({
         {fracciones.map((fraccion, index) => {
           const segmentColor = REVIEW_SEPARATOR_DEFS[index]?.color ?? '#94BB66'
           const segmentPoints = buildDensitogramDisplaySegment(
-            result.profile,
+            analysisProfile,
             review.separatorRatios[index] ?? 0,
             review.separatorRatios[index + 1] ?? 1,
           )
@@ -978,7 +1007,7 @@ function ProfileChart({
                 y1={isLocked ? y : plotTop}
                 y2={plotBottom}
                 stroke={separator.color}
-                strokeWidth={isSelected ? 1 : 1.5}
+                strokeWidth={isSelected ? 2 : 1.5}
                 strokeDasharray={isLocked || isSelected ? '0' : '7 5'}
                 opacity="0.95"
               />
@@ -998,8 +1027,8 @@ function ProfileChart({
                 cy={y}
                 r={isSelected ? 7.5 : 5.5}
                 fill={separator.color}
-                stroke="#FFFFFF"
-                strokeWidth="1"
+                stroke={separator.warning ? '#C0392B' : '#FFFFFF'}
+                strokeWidth={separator.warning ? '2' : '1'}
                 style={{ cursor: isLocked ? 'pointer' : 'ew-resize' }}
                 onPointerDown={event => startDragging(index, event)}
                 onClick={() => onSelectSeparator(index)}
@@ -1038,11 +1067,19 @@ function ProfileChart({
                     <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: separator.color }} />
                     <span className="font-semibold">{separator.label}</span>
                   </div>
-                  <p className="hidden mt-1 text-[11px]" style={{ color: '#6B7178' }}>
+                  <p className="mt-1 text-[11px]" style={{ color: '#6B7178' }}>
                     X {(separator.x * 100).toFixed(1)}% | Y {separator.y.toFixed(3)}
                   </p>
-                  <p className="hidden mt-1 text-[10px] font-medium" style={{ color: index === 0 || index === review.separators.length - 1 ? '#A06A00' : '#5C894A' }}>
-                    {index === 0 || index === review.separators.length - 1 ? 'Linea fija' : 'Minimo editable'}
+                  <p className="mt-1 text-[10px] font-medium" style={{
+                    color: index === 0 || index === review.separators.length - 1
+                      ? '#A06A00'
+                      : separator.warning
+                        ? '#C0392B'
+                        : '#15803D',
+                  }}>
+                    {index === 0 || index === review.separators.length - 1
+                      ? 'Linea fija'
+                      : separator.warning ?? 'Minimo local valido'}
                   </p>
                 </button>
               )
@@ -1090,7 +1127,7 @@ function ProfileChart({
               <span className="inline-block w-3 h-3 rounded-full" style={{ background: selectedSeparator.color }} />
               <span className="text-sm font-semibold" style={{ color: '#54585E' }}>{selectedSeparator.label}</span>
             </div>
-            <div className="grid grid-cols-3 gap-2 mt-3 text-[11px]">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3 text-[11px]">
               <div className="rounded-lg px-2 py-2" style={{ background: '#FBFBFC', border: '1px solid #DFE0E5' }}>
                 <p style={{ color: '#6B7178' }}>Posicion X</p>
                 <p className="mt-1 font-semibold" style={{ color: '#5C894A' }}>{(selectedSeparator.x * 100).toFixed(2)}%</p>
@@ -1103,7 +1140,24 @@ function ProfileChart({
                 <p style={{ color: '#6B7178' }}>Indice</p>
                 <p className="mt-1 font-semibold" style={{ color: '#5C894A' }}>{selectedSeparator.index + 1}</p>
               </div>
+              <div className="rounded-lg px-2 py-2" style={{ background: '#FBFBFC', border: '1px solid #DFE0E5' }}>
+                <p style={{ color: '#6B7178' }}>Prof. valle</p>
+                <p className="mt-1 font-semibold" style={{ color: '#5C894A' }}>{selectedSeparator.valleyDepth.toFixed(4)}</p>
+              </div>
             </div>
+            {!selectedSeparatorLocked && (
+              <div
+                className="mt-3 rounded-lg px-3 py-2 text-[11px]"
+                style={selectedSeparator.warning
+                  ? { background: '#FEF2F2', border: '1px solid #FECACA', color: '#C0392B' }
+                  : { background: '#F0FDF4', border: '1px solid #BBF7D0', color: '#15803D' }}
+              >
+                <p className="font-semibold">Estado del minimo</p>
+                <p className="mt-1">
+                  {selectedSeparator.warning ?? 'El separador coincide con un minimo local de la senal.'}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-4 gap-2 mb-3">
@@ -1166,7 +1220,8 @@ function PrintableProfileChart({
   const plotBottom = plotTop + plotHeight
   const xAxisLabelY = plotBottom + 18
   const yAxisLabelX = plotLeft - 12
-  const displayProfile = buildDensitogramDisplayProfile(result.profile)
+  const analysisProfile = buildAnalysisChartProfile(result)
+  const displayProfile = buildDensitogramDisplayProfile(analysisProfile)
   const points = displayProfile.map(point => `${(plotLeft + point.x * plotWidth).toFixed(1)},${(plotBottom - point.y * plotHeight).toFixed(1)}`).join(' ')
   const subtitle = meta.source === 'backend_fastapi'
     ? `Procesado con ${processorSourceLabel(meta.source)}${meta.calibrationProfile ? ` (${meta.calibrationProfile}${meta.calibrationVersion ? ` ${meta.calibrationVersion}` : ''})` : ''}`
@@ -1226,7 +1281,7 @@ function PrintableProfileChart({
         {fracciones.map((fraccion, index) => {
           const segmentColor = REVIEW_SEPARATOR_DEFS[index]?.color ?? '#94BB66'
           const segmentPoints = buildDensitogramDisplaySegment(
-            result.profile,
+            analysisProfile,
             review.separatorRatios[index] ?? 0,
             review.separatorRatios[index + 1] ?? 1,
           )
@@ -2159,8 +2214,9 @@ export default function NuevoAnalisisPage() {
 
                       <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
                         <p className="font-semibold" style={{ color: '#5C894A' }}>Picos y minimos detectados</p>
-                        <p className="mt-1" style={{ color: '#6B7178' }}>Picos: {formatIndexList(processorResult.peaks, readAnalysisProfileLength(processorResult))}</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Picos por fraccion: {formatIndexList(processorResult.peaks, readAnalysisProfileLength(processorResult))}</p>
                         <p className="mt-1" style={{ color: '#6B7178' }}>Minimos: {formatIndexList(processorResult.valleys, readAnalysisProfileLength(processorResult))}</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Picos detectados totales: {processorResult.detected_peaks}</p>
                       </div>
 
                       <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #DFE0E5' }}>
