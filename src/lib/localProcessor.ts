@@ -1,5 +1,9 @@
 import type { CropPayload } from './electroforesis'
 import {
+  type ProcessorEquipmentProfile,
+  resolveProcessingEquipmentProfile,
+} from './equipmentProfiles'
+import {
   getBundledProcessorCalibration,
   PROCESSOR_FRACTION_KEYS,
   type ProcessorCalibrationProfile,
@@ -19,6 +23,9 @@ export type LocalFractionResult = {
 }
 
 export type LocalProcessorResult = {
+  equipment_profile?: string | null
+  equipment_profile_label?: string | null
+  equipment_adjustments?: string[]
   axis: 'x' | 'y'
   image_size: { width: number; height: number }
   crop_used: { left: number; top: number; width: number; height: number }
@@ -460,12 +467,16 @@ function findNearestReferenceValley(
     const previous = values[index - 1] ?? values[index]
     const current = values[index]
     const next = values[index + 1] ?? values[index]
+    const outerPrevious = values[index - 2] ?? previous
+    const outerNext = values[index + 2] ?? next
     const isLocalMinimum = current <= previous && current <= next
 
     if (!isLocalMinimum && foundLocalMinimum) continue
 
-    const distancePenalty = (Math.abs(index - safeTarget) / Math.max(radius, 1)) * 0.025
-    const score = current + distancePenalty
+    const localDepth = Math.max(0, Math.max(previous, outerPrevious) - current) + Math.max(0, Math.max(next, outerNext) - current)
+    const distancePenalty = (Math.abs(index - safeTarget) / Math.max(radius, 1)) * 0.03
+    const valleyBonus = Math.min(localDepth, 1) * 0.18
+    const score = current + distancePenalty - valleyBonus
 
     if (isLocalMinimum && !foundLocalMinimum) {
       foundLocalMinimum = true
@@ -632,10 +643,281 @@ function buildBoundaries(
     snappedError.maxError > calibration.reference_max_fraction_error_after_snap ||
     snappedError.totalError > areaOnlyError.totalError + calibration.reference_max_total_error_increase_after_snap
   ) {
-    return areaOnly
+    return refineBoundaries(values, areaOnly, targetPercentages, calibration)
   }
 
-  return normalizeBoundaryIndices(snapped, sampleCount)
+  return refineBoundaries(values, normalizeBoundaryIndices(snapped, sampleCount), targetPercentages, calibration)
+}
+
+function boundaryObjective(
+  values: number[],
+  boundaries: number[],
+  targetPercentages: number[],
+) {
+  const { totalError, maxError } = measureTargetError(values, boundaries, targetPercentages)
+  const valleyValues = boundaries.slice(1, -1).map(index => values[index])
+
+  if (valleyValues.length === 0) {
+    return totalError + maxError
+  }
+
+  const meanValley = valleyValues.reduce((total, value) => total + value, 0) / valleyValues.length
+  const maxValley = Math.max(...valleyValues)
+  return totalError + maxError + (meanValley * 5) + (maxValley * 2)
+}
+
+function refineBoundaries(
+  values: number[],
+  boundaries: number[],
+  targetPercentages: number[],
+  calibration: ProcessorCalibrationProfile,
+) {
+  if (values.length <= FRACTION_KEYS.length + 1) {
+    return normalizeBoundaryIndices(boundaries, values.length)
+  }
+
+  const sampleCount = values.length
+  const maxIndex = Math.max(sampleCount - 1, 1)
+  const radius = Math.max(2, Math.round(maxIndex * calibration.reference_valley_snap_window_ratio))
+  const minGap = minGapFor(sampleCount)
+  let nextBoundaries = normalizeBoundaryIndices(boundaries, sampleCount)
+  let bestScore = boundaryObjective(values, nextBoundaries, targetPercentages)
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    let changed = false
+
+    for (let boundaryIndex = 1; boundaryIndex < nextBoundaries.length - 1; boundaryIndex += 1) {
+      const currentIndex = nextBoundaries[boundaryIndex]
+      const minAllowed = nextBoundaries[boundaryIndex - 1] + minGap
+      const maxAllowed = nextBoundaries[boundaryIndex + 1] - minGap
+      if (minAllowed > maxAllowed) continue
+
+      const searchStart = Math.max(minAllowed, currentIndex - radius)
+      const searchEnd = Math.min(maxAllowed, currentIndex + radius)
+      let bestBoundary = currentIndex
+      let bestBoundaryScore = bestScore
+
+      for (let candidate = searchStart; candidate <= searchEnd; candidate += 1) {
+        if (candidate === currentIndex) continue
+
+        const candidateBoundaries = normalizeBoundaryIndices(
+          nextBoundaries.map((value, index) => (index === boundaryIndex ? candidate : value)),
+          sampleCount,
+        )
+        const candidateScore = boundaryObjective(values, candidateBoundaries, targetPercentages)
+
+        if (candidateScore + 1e-6 < bestBoundaryScore) {
+          bestBoundary = candidateBoundaries[boundaryIndex]
+          bestBoundaryScore = candidateScore
+        }
+      }
+
+      if (bestBoundary !== currentIndex) {
+        nextBoundaries = normalizeBoundaryIndices(
+          nextBoundaries.map((value, index) => (index === boundaryIndex ? bestBoundary : value)),
+          sampleCount,
+        )
+        bestScore = bestBoundaryScore
+        changed = true
+      }
+    }
+
+    if (!changed) break
+  }
+
+  return normalizeBoundaryIndices(nextBoundaries, sampleCount)
+}
+
+function scoreAxisCandidate(
+  values: number[],
+  detectedPeaks: number[],
+  boundaries: number[],
+  calibration: ProcessorCalibrationProfile,
+) {
+  const valleyValues = boundaries.slice(1, -1).map(index => values[index])
+  const meanValley = valleyValues.length > 0
+    ? valleyValues.reduce((total, value) => total + value, 0) / valleyValues.length
+    : 1
+  const maxValley = valleyValues.length > 0 ? Math.max(...valleyValues) : 1
+  const highValleyCount = boundaries
+    .slice(1, -1)
+    .filter(index => values[index] >= calibration.high_valley_warning_level)
+    .length
+  const maxIndex = Math.max(values.length - 1, 1)
+  const earlyPeakLimit = Math.round(calibration.fraction_windows[Math.min(1, calibration.fraction_windows.length - 1)].end * maxIndex)
+  const earlyPeakValue = values[findPeakIndex(values, 0, earlyPeakLimit)]
+  const peakCount = detectedPeaks.length
+
+  return (
+    (earlyPeakValue * 4.5) -
+    (meanValley * 5.5) -
+    (maxValley * 2) -
+    (highValleyCount * 0.65) +
+    (Math.min(peakCount, 6) * 0.4) -
+    (Math.abs(peakCount - 5) * 0.25)
+  )
+}
+
+function selectProjectionAxis(
+  grayscale: number[],
+  width: number,
+  height: number,
+  calibration: ProcessorCalibrationProfile,
+) {
+  const defaultAxis: 'x' | 'y' = width >= height ? 'x' : 'y'
+  const errors: string[] = []
+  const candidates: Array<{
+    axis: 'x' | 'y'
+    signal: number[]
+    detectedPeaks: number[]
+    boundaries: number[]
+    score: number
+  }> = []
+
+  ;(['x', 'y'] as const).forEach(axis => {
+    try {
+      const rawProfile = buildRobustProjection(grayscale, width, height, axis, calibration)
+      const signal = normalizeSignal(rawProfile, calibration)
+      const detectedPeaks = detectLocalMaxima(signal, calibration)
+      const boundaries = buildBoundaries(signal, calibration.fraction_windows, calibration)
+      let score = scoreAxisCandidate(signal, detectedPeaks, boundaries, calibration)
+
+      if (axis === defaultAxis) {
+        score += 0.12
+      }
+
+      candidates.push({
+        axis,
+        signal,
+        detectedPeaks,
+        boundaries,
+        score,
+      })
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : 'No se pudo extraer una senal util.')
+    }
+  })
+
+  if (candidates.length === 0) {
+    throw new Error(errors[0] ?? 'No se pudo extraer una senal util para el estudio.')
+  }
+
+  candidates.sort((left, right) => right.score - left.score)
+  return candidates[0]
+}
+
+function snapBoundaryToRatio(
+  values: number[],
+  boundaries: number[],
+  boundaryIndex: number,
+  targetRatio: number,
+  calibration: ProcessorCalibrationProfile,
+) {
+  if (boundaryIndex <= 0 || boundaryIndex >= boundaries.length - 1) {
+    return boundaries
+  }
+
+  const sampleCount = values.length
+  const maxIndex = Math.max(sampleCount - 1, 1)
+  const minGap = minGapFor(sampleCount)
+  const nextBoundaries = normalizeBoundaryIndices(boundaries, sampleCount)
+  const minAllowed = nextBoundaries[boundaryIndex - 1] + minGap
+  const maxAllowed = nextBoundaries[boundaryIndex + 1] - minGap
+  const targetIndex = clamp(Math.round(clampRatio(targetRatio, 0, 1) * maxIndex), minAllowed, maxAllowed)
+
+  nextBoundaries[boundaryIndex] = findNearestReferenceValley(
+    values,
+    targetIndex,
+    minAllowed,
+    maxAllowed,
+    calibration,
+  )
+
+  return normalizeBoundaryIndices(nextBoundaries, sampleCount)
+}
+
+function applyBoundaryTargets(
+  values: number[],
+  boundaries: number[],
+  calibration: ProcessorCalibrationProfile,
+  targetRatios: Record<number, number>,
+) {
+  let nextBoundaries = normalizeBoundaryIndices(boundaries, values.length)
+
+  for (const boundaryIndex of Object.keys(targetRatios).map(Number).sort((left, right) => left - right)) {
+    nextBoundaries = snapBoundaryToRatio(
+      values,
+      nextBoundaries,
+      boundaryIndex,
+      targetRatios[boundaryIndex],
+      calibration,
+    )
+  }
+
+  return nextBoundaries
+}
+
+function applySebiaAgaroseGuardrails(
+  values: number[],
+  boundaries: number[],
+  calibration: ProcessorCalibrationProfile,
+) {
+  const maxIndex = Math.max(values.length - 1, 1)
+  let nextBoundaries = normalizeBoundaryIndices(boundaries, values.length)
+  const adjustments: string[] = []
+
+  const readMetrics = (currentBoundaries: number[]) => ({
+    percentages: buildAreaPercentages(values, currentBoundaries),
+    separatorPercentages: currentBoundaries
+      .slice(1, -1)
+      .map(index => (index / maxIndex) * 100),
+  })
+
+  let { percentages, separatorPercentages } = readMetrics(nextBoundaries)
+  let [albumina, alfa1, , beta1, , gamma] = percentages
+  let [sep1, , , sep4, sep5] = separatorPercentages
+
+  if (alfa1 >= 10 && albumina <= 50 && sep1 <= 53) {
+    nextBoundaries = applyBoundaryTargets(values, nextBoundaries, calibration, { 1: 0.60, 2: 0.64, 3: 0.72 })
+    adjustments.push('Guardarrail SEBIA agarosa: correccion Albumina/Alfa 1.')
+    ;({ percentages, separatorPercentages } = readMetrics(nextBoundaries))
+    ;[albumina, alfa1, , beta1, , gamma] = percentages
+    ;[sep1, , , sep4, sep5] = separatorPercentages
+  }
+
+  if (beta1 >= 12 && gamma <= 3 && (sep4 >= 74 || sep5 >= 80)) {
+    nextBoundaries = applyBoundaryTargets(values, nextBoundaries, calibration, { 4: 0.72, 5: 0.755 })
+    adjustments.push('Guardarrail SEBIA agarosa: correccion puente Beta/Gamma.')
+    ;({ percentages, separatorPercentages } = readMetrics(nextBoundaries))
+    ;[albumina, alfa1, , beta1, , gamma] = percentages
+    ;[sep1, , , sep4, sep5] = separatorPercentages
+  }
+
+  if (gamma <= 3 && sep5 >= 84) {
+    nextBoundaries = applyBoundaryTargets(values, nextBoundaries, calibration, { 5: 0.795 })
+    adjustments.push('Guardarrail SEBIA agarosa: correccion Beta 2/Gamma.')
+  }
+
+  return {
+    boundaries: normalizeBoundaryIndices(nextBoundaries, values.length),
+    adjustments,
+  }
+}
+
+function applyEquipmentGuardrails(
+  values: number[],
+  boundaries: number[],
+  calibration: ProcessorCalibrationProfile,
+  equipmentProfile: ProcessorEquipmentProfile,
+) {
+  if (equipmentProfile.usesSebiaAgaroseGuardrails) {
+    return applySebiaAgaroseGuardrails(values, boundaries, calibration)
+  }
+
+  return {
+    boundaries: normalizeBoundaryIndices(boundaries, values.length),
+    adjustments: [] as string[],
+  }
 }
 
 function downsampleProfile(values: number[], maxPoints: number) {
@@ -690,8 +972,11 @@ export async function processElectrophoresisImage(input: {
   crop?: CropPayload | null
   totalConcentration?: number | null
   calibration?: ProcessorCalibrationProfile | null
+  equipmentOrigin?: string | null
+  equipmentModel?: string | null
 }): Promise<LocalProcessorResult> {
   const calibration = input.calibration ?? getBundledProcessorCalibration()
+  const equipmentProfile = resolveProcessingEquipmentProfile(input.equipmentOrigin, input.equipmentModel)
   const image = await loadImageData(input.imageUrl)
   const cropRect = buildCropRect(input.crop, image.width, image.height)
   const fullCanvas = getCanvasContext(image.width, image.height)
@@ -700,12 +985,19 @@ export async function processElectrophoresisImage(input: {
   fullCanvas.context.putImageData(fullImageData, 0, 0)
 
   const croppedData = fullCanvas.context.getImageData(cropRect.left, cropRect.top, cropRect.width, cropRect.height)
-  const axis: 'x' | 'y' = cropRect.width >= cropRect.height ? 'x' : 'y'
   const grayscale = prepareGrayscaleMatrix(croppedData.data, cropRect.width, cropRect.height, calibration)
-  const rawProfile = buildRobustProjection(grayscale, cropRect.width, cropRect.height, axis, calibration)
-  const normalizedProfile = normalizeSignal(rawProfile, calibration)
-  const detectedPeaks = detectLocalMaxima(normalizedProfile, calibration)
-  const boundaries = buildBoundaries(normalizedProfile, calibration.fraction_windows, calibration)
+  const {
+    axis,
+    signal: normalizedProfile,
+    detectedPeaks,
+    boundaries: baseBoundaries,
+  } = selectProjectionAxis(grayscale, cropRect.width, cropRect.height, calibration)
+  const { boundaries, adjustments: equipmentAdjustments } = applyEquipmentGuardrails(
+    normalizedProfile,
+    baseBoundaries,
+    calibration,
+    equipmentProfile,
+  )
   const valleys = boundaries.slice(1, -1)
   const totalArea = trapezoidArea(normalizedProfile, boundaries[0], boundaries[boundaries.length - 1])
 
@@ -741,9 +1033,21 @@ export async function processElectrophoresisImage(input: {
     gamma: { start: 0, end: 0, peak_index: 0, area: 0, percentage: 0, concentration: null },
   })
 
-  const warningParts = ['Motor local v3.6 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  const warningParts = ['Motor local v3.7 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  if (equipmentProfile.usesSebiaAgaroseGuardrails) {
+    warningParts.push(`Perfil de equipo activo: ${equipmentProfile.label}.`)
+  }
+  if (equipmentProfile.prefersCurveInput) {
+    warningParts.push('Equipo SEBIA capilar: el procesamiento por imagen es preliminar; ideal usar curva exportada por el equipo.')
+  }
+  if (equipmentAdjustments.length > 0) {
+    warningParts.push(equipmentAdjustments.join(' '))
+  }
   if (cropRect.width < calibration.crop_warning_min_width || cropRect.height < calibration.crop_warning_min_height) {
     warningParts.push('El recorte es pequeno y puede degradar la estimacion.')
+  }
+  if (axis !== (cropRect.width >= cropRect.height ? 'x' : 'y')) {
+    warningParts.push(`El motor selecciono automaticamente el eje ${axis.toUpperCase()} por calidad de perfil.`)
   }
   if (detectedPeaks.length < calibration.expected_peak_warning_threshold) {
     warningParts.push('Se detectaron pocos picos; revisar imagen y parametros.')
@@ -753,6 +1057,9 @@ export async function processElectrophoresisImage(input: {
   }
 
   return {
+    equipment_profile: equipmentProfile.key,
+    equipment_profile_label: equipmentProfile.label,
+    equipment_adjustments: equipmentAdjustments,
     axis,
     image_size: { width: image.width, height: image.height },
     crop_used: cropRect,

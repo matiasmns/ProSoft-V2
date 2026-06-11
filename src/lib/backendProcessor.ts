@@ -16,11 +16,18 @@ function appendNumber(formData: FormData, field: string, value: number | null | 
   formData.append(field, String(Math.round(value)))
 }
 
+function appendText(formData: FormData, field: string, value: string | null | undefined) {
+  if (!value?.trim()) return
+  formData.append(field, value.trim())
+}
+
 export async function processElectrophoresisWithBackend(input: {
   imageUrl: string
   fileName: string
   crop?: CropPayload | null
   totalConcentration?: number | null
+  equipmentOrigin?: string | null
+  equipmentModel?: string | null
 }) {
   if (!ANALYSIS_API_ENABLED) {
     throw new Error('El backend de analisis no esta habilitado. Define VITE_ANALYSIS_API_URL para usar FastAPI.')
@@ -44,6 +51,8 @@ export async function processElectrophoresisWithBackend(input: {
   appendNumber(formData, 'crop_top', input.crop?.arriba)
   appendNumber(formData, 'crop_width', input.crop?.ancho)
   appendNumber(formData, 'crop_height', input.crop?.alto)
+  appendText(formData, 'equipment_origin', input.equipmentOrigin)
+  appendText(formData, 'equipment_model', input.equipmentModel)
 
   if (input.totalConcentration != null && !Number.isNaN(input.totalConcentration)) {
     formData.append('total_concentration', String(input.totalConcentration))

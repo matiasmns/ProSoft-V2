@@ -728,9 +728,14 @@ export default function CargadeMuestra() {
                             ))}
                           </div>
                         ) : (
-                          <p className="text-xs" style={{ color: '#54585E' }}>
-                            Dibuja una mascara sobre la imagen para calcular margenes y area util de analisis.
-                          </p>
+                          <div className="space-y-2">
+                            <p className="text-xs" style={{ color: '#54585E' }}>
+                              Dibuja una mascara sobre la imagen para calcular margenes y area util de analisis.
+                            </p>
+                            <p className="text-[11px]" style={{ color: '#94BB66' }}>
+                              Si no defines una mascara, el procesador analizara la imagen completa.
+                            </p>
+                          </div>
                         )}
                       </div>
 

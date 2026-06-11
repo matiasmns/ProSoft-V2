@@ -110,6 +110,46 @@ class ProcessorSyntheticCalibrationTests(unittest.TestCase):
         self.assertLess(max(beta2_values) - min(beta2_values), 1.0)
         self.assertLess(max(gamma_values) - min(gamma_values), 1.0)
 
+    def test_axis_is_selected_by_profile_quality_when_image_is_rotated(self) -> None:
+        case = self.synthetic_case_map["normal_reference"]
+        signal = build_synthetic_signal(case, self.calibration)
+        image = render_signal_to_image(signal)
+        rotated = image.transpose(1, 0, 2)[:, ::-1, :]
+        payload = encode_png(rotated)
+        response = process_electrophoresis_image(
+            payload,
+            total_concentration=case.total_concentration,
+            calibration=self.calibration,
+        )
+
+        self.assertEqual(response.axis, "y")
+        self.assertEqual(dominant_fraction(response), "albumina")
+        self.assertGreater(response.fractions["albumina"].percentage, 35.0)
+
+    def test_sebia_agarose_profile_is_reported_when_requested(self) -> None:
+        payload = encode_png(render_signal_to_image(build_synthetic_signal(self.synthetic_case_map["normal_reference"], self.calibration)))
+        response = process_electrophoresis_image(
+            payload,
+            total_concentration=6.8,
+            equipment_origin="SEBIA",
+            equipment_model="HYDRASYS / HYDRAGEL",
+            calibration=self.calibration,
+        )
+        self.assertEqual(response.equipment_profile, "sebia_agarose_image")
+        self.assertIn("SEBIA", response.equipment_profile_label or "")
+
+    def test_sebia_capillary_profile_adds_warning(self) -> None:
+        payload = encode_png(render_signal_to_image(build_synthetic_signal(self.synthetic_case_map["normal_reference"], self.calibration)))
+        response = process_electrophoresis_image(
+            payload,
+            total_concentration=6.8,
+            equipment_origin="SEBIA",
+            equipment_model="CAPILLARYS",
+            calibration=self.calibration,
+        )
+        self.assertEqual(response.equipment_profile, "sebia_capillary_image")
+        self.assertIn("capilar", (response.warning or "").lower())
+
 
 class CalibrationReloadTests(unittest.TestCase):
     def test_get_calibration_refreshes_when_file_changes(self) -> None:

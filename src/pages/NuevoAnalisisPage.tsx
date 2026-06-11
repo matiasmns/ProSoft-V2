@@ -10,6 +10,7 @@ import {
   type CropPayload,
 } from '../lib/electroforesis'
 import { processElectrophoresisImage, type LocalProcessorResult } from '../lib/localProcessor'
+import { resolveProcessingEquipmentProfile } from '../lib/equipmentProfiles'
 import { LOCAL_FALLBACK_ALGORITHM_VERSION, resolveLocalProcessorCalibration } from '../lib/processorCalibration'
 import {
   REVIEW_SEPARATOR_DEFS,
@@ -54,6 +55,8 @@ type AnalisisRow = {
   gamma_porcentaje: number | null
   gamma_concentracion: number | null
   resultado_crudo: Record<string, unknown> | null
+  equipo_origen: string | null
+  modelo_equipo: string | null
 }
 type RawInputImage = { nombre: string; tipo: string; storage_path: string | null; crop: CropPayload | null }
 type FraccionKey = 'albumina' | 'alfa_1' | 'alfa_2' | 'beta_1' | 'beta_2' | 'gamma'
@@ -91,6 +94,9 @@ const globulinFractionKeys: FraccionKey[] = ['alfa_1', 'alfa_2', 'beta_1', 'beta
 const alphaFractionKeys: FraccionKey[] = ['alfa_1', 'alfa_2']
 const betaFractionKeys: FraccionKey[] = ['beta_1', 'beta_2']
 const DEFAULT_CALIBRATION_PATTERN: CalibrationPattern = 'normal'
+const SEBIA_ORIGIN_PRESET = 'SEBIA'
+const SEBIA_AGAROSE_MODEL_PRESET = 'HYDRASYS / HYDRAGEL (gel)'
+const SEBIA_CAPILLARY_MODEL_PRESET = 'CAPILLARYS / MINICAP (capilar)'
 const CALIBRATION_PATTERN_OPTIONS: Array<{ value: CalibrationPattern; label: string }> = [
   { value: 'normal', label: 'Normal' },
   { value: 'gamma_alta', label: 'Gamma alta' },
@@ -1305,6 +1311,8 @@ export default function NuevoAnalisisPage() {
   const [numeroPlaca, setNumeroPlaca] = useState('')
   const [numeroMuestra, setNumeroMuestra] = useState('')
   const [numeroPaciente, setNumeroPaciente] = useState('')
+  const [equipoOrigen, setEquipoOrigen] = useState('')
+  const [modeloEquipo, setModeloEquipo] = useState('')
   const [cantidadPicos, setCantidadPicos] = useState('')
   const [concTotal, setConcTotal] = useState('')
   const [vals, setVals] = useState<FraccionVals>(createEmptyVals())
@@ -1329,6 +1337,7 @@ export default function NuevoAnalisisPage() {
   const printableImages = images.filter(image => image.preview).slice(0, 2)
   const derivedAnalysisValues = buildDerivedAnalysisValues(vals)
   const referenceTargetSummary = buildReferenceTargetSummary(referenceTargets)
+  const resolvedEquipmentProfile = resolveProcessingEquipmentProfile(equipoOrigen, modeloEquipo)
   const usingProcessorFractions = processorResult && separatorRatios
     ? shouldUseProcessorFractions(processorResult, separatorRatios)
     : false
@@ -1346,6 +1355,11 @@ export default function NuevoAnalisisPage() {
     const nextPattern = isCalibrationPattern(value) ? value : DEFAULT_CALIBRATION_PATTERN
     setReferenceCalibrationPattern(nextPattern)
     setReferenceCalibration(null)
+  }
+
+  function handleApplyEquipmentPreset(modelPreset: string) {
+    setEquipoOrigen(SEBIA_ORIGIN_PRESET)
+    setModeloEquipo(modelPreset)
   }
 
   function handleApplyReferenceCalibration() {
@@ -1397,6 +1411,8 @@ export default function NuevoAnalisisPage() {
       numero_placa: numeroPlaca || null,
       numero_muestra: numeroMuestra || null,
       numero_paciente: numeroPaciente || null,
+      equipo_origen: equipoOrigen.trim() || null,
+      modelo_equipo: modeloEquipo.trim() || null,
       cantidad_picos: nextCantidadPicos ? parseInt(nextCantidadPicos, 10) : null,
       concentracion_total: concTotal ? parseFloat(concTotal) : null,
       observaciones_generales: observaciones || null,
@@ -1489,7 +1505,7 @@ export default function NuevoAnalisisPage() {
       setError('')
       const { data: analisis, error: analisisError } = await supabase
         .from('analisis_electroforesis')
-        .select('id,numero_placa,numero_muestra,numero_paciente,cantidad_picos,concentracion_total,observaciones_generales,albumina_porcentaje,albumina_concentracion,alfa_1_porcentaje,alfa_1_concentracion,alfa_2_porcentaje,alfa_2_concentracion,beta_1_porcentaje,beta_1_concentracion,beta_2_porcentaje,beta_2_concentracion,gamma_porcentaje,gamma_concentracion,resultado_crudo')
+        .select('id,numero_placa,numero_muestra,numero_paciente,cantidad_picos,concentracion_total,observaciones_generales,albumina_porcentaje,albumina_concentracion,alfa_1_porcentaje,alfa_1_concentracion,alfa_2_porcentaje,alfa_2_concentracion,beta_1_porcentaje,beta_1_concentracion,beta_2_porcentaje,beta_2_concentracion,gamma_porcentaje,gamma_concentracion,resultado_crudo,equipo_origen,modelo_equipo')
         .eq('id', analisisId)
         .returns<AnalisisRow[]>()
         .single()
@@ -1505,6 +1521,8 @@ export default function NuevoAnalisisPage() {
       setNumeroPlaca(analisis.numero_placa ?? '')
       setNumeroMuestra(analisis.numero_muestra ?? '')
       setNumeroPaciente(analisis.numero_paciente ?? '')
+      setEquipoOrigen(analisis.equipo_origen ?? '')
+      setModeloEquipo(analisis.modelo_equipo ?? '')
       setCantidadPicos(toTextValue(analisis.cantidad_picos))
       setConcTotal(toTextValue(analisis.concentracion_total))
       setObservaciones(analisis.observaciones_generales ?? '')
@@ -1597,6 +1615,8 @@ export default function NuevoAnalisisPage() {
       const storedImages = readStoredInputImages(rawResult)
       const crop = findCropForImage(sourceImage, storedImages)
       const safeTotalConcentration = parseTotalConcentration(concTotal)
+      const normalizedEquipmentOrigin = equipoOrigen.trim() || null
+      const normalizedEquipmentModel = modeloEquipo.trim() || null
       const processingPreview = await refreshProcessingPreview(sourceImage)
       const shouldTryBackend = ANALYSIS_API_ENABLED && processorMode === 'auto'
 
@@ -1626,6 +1646,8 @@ export default function NuevoAnalisisPage() {
             fileName: sourceImage.nombre,
             crop,
             totalConcentration: safeTotalConcentration,
+            equipmentOrigin: normalizedEquipmentOrigin,
+            equipmentModel: normalizedEquipmentModel,
           })
           result = backendResult
           algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v3.6-calibrated-boundaries'
@@ -1645,6 +1667,8 @@ export default function NuevoAnalisisPage() {
             crop,
             totalConcentration: safeTotalConcentration,
             calibration: localCalibration,
+            equipmentOrigin: normalizedEquipmentOrigin,
+            equipmentModel: normalizedEquipmentModel,
           })
           calibrationProfile = localCalibration.profile_name
           calibrationVersion = localCalibration.profile_version
@@ -1658,6 +1682,8 @@ export default function NuevoAnalisisPage() {
           crop,
           totalConcentration: safeTotalConcentration,
           calibration: localCalibration,
+          equipmentOrigin: normalizedEquipmentOrigin,
+          equipmentModel: normalizedEquipmentModel,
         })
         calibrationProfile = localCalibration.profile_name
         calibrationVersion = localCalibration.profile_version
@@ -1834,16 +1860,51 @@ export default function NuevoAnalisisPage() {
                     <label className="text-xs font-semibold" style={{ color: '#54585E' }}>Nro. Paciente</label>
                     <input value={numeroPaciente} onChange={event => setNumeroPaciente(event.target.value)} placeholder="Nro. Paciente" className={compactInputClass} style={inputStyle} onFocus={focusGreen} onBlur={blurGray} />
 
+                    <label className="text-xs font-semibold" style={{ color: '#54585E' }}>Equipo</label>
+                    <input value={equipoOrigen} onChange={event => setEquipoOrigen(event.target.value)} placeholder="Ej. SEBIA" className={compactInputClass} style={inputStyle} onFocus={focusGreen} onBlur={blurGray} />
+
+                    <label className="text-xs font-semibold" style={{ color: '#54585E' }}>Modelo / Plataforma</label>
+                    <input value={modeloEquipo} onChange={event => setModeloEquipo(event.target.value)} placeholder="Ej. HYDRASYS / HYDRAGEL (gel)" className={compactInputClass} style={inputStyle} onFocus={focusGreen} onBlur={blurGray} />
+
                     <label className="text-xs font-semibold" style={{ color: '#54585E' }}>Cantidad de picos</label>
                     <input type="number" value={cantidadPicos} onChange={event => setCantidadPicos(event.target.value)} placeholder="Cantidad de picos" className={compactInputClass} style={inputStyle} onFocus={focusGreen} onBlur={blurGray} />
 
                     <label className="text-xs font-semibold" style={{ color: '#54585E' }}>Conc. total (g/dL)</label>
                     <input type="number" step="0.01" value={concTotal} onChange={event => setConcTotal(event.target.value)} placeholder="Concentracion total (g/dL)" className={compactInputClass} style={inputStyle} onFocus={focusGreen} onBlur={blurGray} />
 
-                    <div />
-                    <p className="text-xs hidden" style={{ color: '#54585E' }}>
-                      Este valor habilita el calculo de `g/dL` para cada fraccion. Si queda vacio, el estudio se procesa solo en porcentaje.
-                    </p>
+                    <div className="col-span-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleApplyEquipmentPreset(SEBIA_AGAROSE_MODEL_PRESET)}
+                        className="rounded-lg px-3 py-2 text-[11px] font-medium transition"
+                        style={{ background: '#FFFFFF', color: '#54585E', border: '1px solid #DFE0E5' }}
+                      >
+                        SEBIA gel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyEquipmentPreset(SEBIA_CAPILLARY_MODEL_PRESET)}
+                        className="rounded-lg px-3 py-2 text-[11px] font-medium transition"
+                        style={{ background: '#FFFFFF', color: '#54585E', border: '1px solid #DFE0E5' }}
+                      >
+                        SEBIA capilar
+                      </button>
+                    </div>
+                    <div className="col-span-2 rounded-xl px-3 py-3 text-xs" style={{
+                      background: resolvedEquipmentProfile.prefersCurveInput ? '#FFF7ED' : '#F4F5F7',
+                      border: resolvedEquipmentProfile.prefersCurveInput ? '1px solid #FED7AA' : '1px solid #DFE0E5',
+                      color: '#54585E',
+                    }}>
+                      <p className="font-semibold" style={{ color: '#5C894A' }}>Perfil de equipo activo</p>
+                      <p className="mt-1">{resolvedEquipmentProfile.label}</p>
+                      <p className="mt-1" style={{ color: '#6B7178' }}>
+                        {resolvedEquipmentProfile.prefersCurveInput
+                          ? 'Si el equipo es capilar, conviene validar contra curva/export del equipo. La imagen sigue siendo util como referencia visual, pero el motor la trata como preliminar.'
+                          : resolvedEquipmentProfile.usesSebiaAgaroseGuardrails
+                            ? 'Se activan guardarrailes de segmentacion orientados a SEBIA gel/agarosa para proteger Beta 2 / Gamma y casos con Alfa 1 inflada.'
+                            : 'Si el laboratorio usa un metodo fijo, completar equipo y plataforma ayuda a estabilizar la segmentacion.'}
+                      </p>
+                    </div>
                   </div>
                 </Card>
 
@@ -2073,6 +2134,23 @@ export default function NuevoAnalisisPage() {
                       </div>
 
                       <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
+                        <p className="font-semibold" style={{ color: '#5C894A' }}>Equipo / perfil aplicado</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>
+                          {equipoOrigen.trim() || modeloEquipo.trim()
+                            ? [equipoOrigen.trim(), modeloEquipo.trim()].filter(Boolean).join(' · ')
+                            : '---'}
+                        </p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>
+                          {processorResult.equipment_profile_label ?? resolvedEquipmentProfile.label}
+                        </p>
+                        {(processorResult.equipment_adjustments?.length ?? 0) > 0 && (
+                          <p className="mt-1" style={{ color: '#6B7178' }}>
+                            Ajustes aplicados: {processorResult.equipment_adjustments?.join(' ')}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
                         <p className="font-semibold" style={{ color: '#5C894A' }}>Crop usado</p>
                         <p className="mt-1" style={{ color: '#6B7178' }}>
                           x {processorResult.crop_used.left}, y {processorResult.crop_used.top}, ancho {processorResult.crop_used.width}, alto {processorResult.crop_used.height}
@@ -2185,6 +2263,10 @@ export default function NuevoAnalisisPage() {
                   <span>{formatDisplayValue(cantidadPicos)}</span>
                   <span className="font-semibold" style={{ color: '#54585E' }}>Conc. total</span>
                   <span>{formatDisplayValue(concTotal ? `${concTotal} g/dL` : '')}</span>
+                  <span className="font-semibold" style={{ color: '#54585E' }}>Equipo</span>
+                  <span>{formatDisplayValue(equipoOrigen)}</span>
+                  <span className="font-semibold" style={{ color: '#54585E' }}>Plataforma</span>
+                  <span>{formatDisplayValue(modeloEquipo)}</span>
                 </div>
                 {observaciones.trim() && (
                   <div className="mt-2 rounded-lg p-2" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>

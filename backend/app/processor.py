@@ -6,10 +6,16 @@ from scipy.ndimage import gaussian_filter1d, minimum_filter1d
 from scipy.signal import find_peaks
 
 from .calibration import ProcessorCalibration, get_calibration
+from .equipment_profiles import (
+    SEBIA_AGAROSE_IMAGE_PROFILE_KEY,
+    SEBIA_CAPILLARY_IMAGE_PROFILE_KEY,
+    EquipmentProfileResolution,
+    resolve_equipment_profile,
+)
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.6-calibrated-boundaries"
+ALGORITHM_VERSION = "fastapi-opencv-v3.7-axis-quality-boundary-refine"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
@@ -219,13 +225,17 @@ def find_nearest_reference_valley(
         previous = float(values[index - 1]) if index > 0 else float(values[index])
         current = float(values[index])
         next_value = float(values[index + 1]) if index < max_index else float(values[index])
+        outer_previous = float(values[index - 2]) if index > 1 else previous
+        outer_next = float(values[index + 2]) if index < max_index - 1 else next_value
         is_local_minimum = current <= previous and current <= next_value
 
         if not is_local_minimum and found_local_minimum:
             continue
 
-        distance_penalty = abs(index - safe_target) / max(radius, 1) * 0.025
-        score = current + distance_penalty
+        local_depth = max(0.0, max(previous, outer_previous) - current) + max(0.0, max(next_value, outer_next) - current)
+        distance_penalty = abs(index - safe_target) / max(radius, 1) * 0.03
+        valley_bonus = min(local_depth, 1.0) * 0.18
+        score = current + distance_penalty - valley_bonus
 
         if is_local_minimum and not found_local_minimum:
             found_local_minimum = True
@@ -349,9 +359,146 @@ def build_boundaries(signal: np.ndarray, calibration: ProcessorCalibration | Non
         snapped_max_error > active_calibration.reference_max_fraction_error_after_snap
         or snapped_total_error > area_only_total_error + active_calibration.reference_max_total_error_increase_after_snap
     ):
-        return area_only
+        selected = area_only
+    else:
+        selected = normalize_boundary_indices(snapped, sample_count)
 
-    return normalize_boundary_indices(snapped, sample_count)
+    return refine_boundaries(signal, selected, target_percentages, active_calibration)
+
+
+def boundary_objective(signal: np.ndarray, boundaries: list[int], target_percentages: list[float]) -> float:
+    total_error, max_error = measure_target_error(signal, boundaries, target_percentages)
+    internal_boundaries = boundaries[1:-1]
+
+    if not internal_boundaries:
+        return total_error + max_error
+
+    valley_values = np.asarray([float(signal[index]) for index in internal_boundaries], dtype=np.float64)
+    mean_valley = float(valley_values.mean())
+    max_valley = float(valley_values.max())
+    return total_error + max_error + (mean_valley * 5.0) + (max_valley * 2.0)
+
+
+def refine_boundaries(
+    signal: np.ndarray,
+    boundaries: list[int],
+    target_percentages: list[float],
+    calibration: ProcessorCalibration,
+) -> list[int]:
+    sample_count = signal.size
+    if sample_count <= len(FRACTION_KEYS) + 1:
+        return normalize_boundary_indices(boundaries, sample_count)
+
+    max_index = max(sample_count - 1, 1)
+    radius = max(2, int(round(max_index * calibration.reference_valley_snap_window_ratio)))
+    min_gap = min_gap_for(sample_count)
+    next_boundaries = normalize_boundary_indices(list(boundaries), sample_count)
+    best_score = boundary_objective(signal, next_boundaries, target_percentages)
+
+    for _ in range(3):
+        changed = False
+
+        for boundary_index in range(1, len(next_boundaries) - 1):
+            current_index = next_boundaries[boundary_index]
+            min_allowed = next_boundaries[boundary_index - 1] + min_gap
+            max_allowed = next_boundaries[boundary_index + 1] - min_gap
+            if min_allowed > max_allowed:
+                continue
+
+            search_start = max(min_allowed, current_index - radius)
+            search_end = min(max_allowed, current_index + radius)
+            best_boundary = current_index
+            best_boundary_score = best_score
+
+            for candidate in range(search_start, search_end + 1):
+                if candidate == current_index:
+                    continue
+
+                candidate_boundaries = list(next_boundaries)
+                candidate_boundaries[boundary_index] = candidate
+                candidate_boundaries = normalize_boundary_indices(candidate_boundaries, sample_count)
+                candidate_score = boundary_objective(signal, candidate_boundaries, target_percentages)
+
+                if candidate_score + 1e-6 < best_boundary_score:
+                    best_boundary = candidate_boundaries[boundary_index]
+                    best_boundary_score = candidate_score
+
+            if best_boundary != current_index:
+                next_boundaries[boundary_index] = best_boundary
+                next_boundaries = normalize_boundary_indices(next_boundaries, sample_count)
+                best_score = best_boundary_score
+                changed = True
+
+        if not changed:
+            break
+
+    return normalize_boundary_indices(next_boundaries, sample_count)
+
+
+def score_axis_candidate(
+    signal: np.ndarray,
+    detected_peaks: np.ndarray,
+    boundaries: list[int],
+    calibration: ProcessorCalibration,
+) -> float:
+    internal_boundaries = boundaries[1:-1]
+
+    if internal_boundaries:
+        valley_values = np.asarray([float(signal[index]) for index in internal_boundaries], dtype=np.float64)
+        mean_valley = float(valley_values.mean())
+        max_valley = float(valley_values.max())
+        high_valley_count = sum(
+            1
+            for index in internal_boundaries
+            if float(signal[index]) >= calibration.high_valley_warning_level
+        )
+    else:
+        mean_valley = 1.0
+        max_valley = 1.0
+        high_valley_count = len(FRACTION_KEYS) - 1
+
+    max_index = max(signal.size - 1, 1)
+    early_peak_limit = int(round(calibration.fraction_windows[min(1, len(calibration.fraction_windows) - 1)].end * max_index))
+    early_peak_value = float(signal[find_peak_index(signal, 0, early_peak_limit)])
+    peak_count = int(detected_peaks.size)
+
+    return (
+        (early_peak_value * 4.5)
+        - (mean_valley * 5.5)
+        - (max_valley * 2.0)
+        - (high_valley_count * 0.65)
+        + (min(peak_count, 6) * 0.4)
+        - (abs(peak_count - 5) * 0.25)
+    )
+
+
+def select_projection_axis(
+    gray_image: np.ndarray,
+    calibration: ProcessorCalibration,
+) -> tuple[str, np.ndarray, np.ndarray, list[int]]:
+    default_axis = "x" if gray_image.shape[1] >= gray_image.shape[0] else "y"
+    candidates: list[tuple[float, str, np.ndarray, np.ndarray, list[int]]] = []
+    errors: list[str] = []
+
+    for axis in ("x", "y"):
+        try:
+            raw_signal = robust_projection(gray_image, axis, calibration)
+            signal = normalize_signal(raw_signal, calibration)
+            detected_peaks = detect_peaks(signal, calibration)
+            boundaries = build_boundaries(signal, calibration)
+            score = score_axis_candidate(signal, detected_peaks, boundaries, calibration)
+            if axis == default_axis:
+                score += 0.12
+            candidates.append((score, axis, signal, detected_peaks, boundaries))
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    if not candidates:
+        raise ValueError(errors[0] if errors else "No se pudo extraer una senal util para el estudio.")
+
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    _, axis, signal, detected_peaks, boundaries = candidates[0]
+    return axis, signal, detected_peaks, boundaries
 
 
 def downsample(signal: np.ndarray, max_points: int) -> list[ProfilePoint]:
@@ -388,6 +535,120 @@ def build_fractions(signal: np.ndarray, boundaries: list[int], total_concentrati
     return fractions
 
 
+def snap_boundary_to_ratio(
+    signal: np.ndarray,
+    boundaries: list[int],
+    boundary_index: int,
+    target_ratio: float,
+    calibration: ProcessorCalibration,
+) -> list[int]:
+    if boundary_index <= 0 or boundary_index >= len(boundaries) - 1:
+        return boundaries
+
+    sample_count = signal.size
+    max_index = max(sample_count - 1, 1)
+    min_gap = min_gap_for(sample_count)
+    target_index = clamp(int(round(clamp_ratio(target_ratio, 0.0, 1.0) * max_index)), 0, max_index)
+    next_boundaries = normalize_boundary_indices(list(boundaries), sample_count)
+    min_allowed = next_boundaries[boundary_index - 1] + min_gap
+    max_allowed = next_boundaries[boundary_index + 1] - min_gap
+    snapped_index = find_nearest_reference_valley(
+        signal,
+        clamp(target_index, min_allowed, max_allowed),
+        min_allowed,
+        max_allowed,
+        calibration,
+    )
+    next_boundaries[boundary_index] = snapped_index
+    return normalize_boundary_indices(next_boundaries, sample_count)
+
+
+def apply_boundary_targets(
+    signal: np.ndarray,
+    boundaries: list[int],
+    calibration: ProcessorCalibration,
+    target_ratios: dict[int, float],
+) -> list[int]:
+    next_boundaries = normalize_boundary_indices(list(boundaries), signal.size)
+    for boundary_index in sorted(target_ratios):
+        next_boundaries = snap_boundary_to_ratio(
+            signal,
+            next_boundaries,
+            boundary_index,
+            target_ratios[boundary_index],
+            calibration,
+        )
+    return next_boundaries
+
+
+def apply_sebia_agarose_guardrails(
+    signal: np.ndarray,
+    boundaries: list[int],
+    calibration: ProcessorCalibration,
+) -> tuple[list[int], list[str]]:
+    max_index = max(signal.size - 1, 1)
+    next_boundaries = normalize_boundary_indices(list(boundaries), signal.size)
+    adjustments: list[str] = []
+
+    def read_metrics(current_boundaries: list[int]) -> tuple[list[float], list[float]]:
+        percentages = build_area_percentages(signal, current_boundaries)
+        separator_percentages = [
+            (current_boundaries[index] / max_index) * 100.0
+            for index in range(1, len(current_boundaries) - 1)
+        ]
+        return percentages, separator_percentages
+
+    percentages, separator_percentages = read_metrics(next_boundaries)
+    albumina, alfa_1, _, beta_1, _, gamma = percentages
+    sep_1, _, _, sep_4, sep_5 = separator_percentages
+
+    if alfa_1 >= 10.0 and albumina <= 50.0 and sep_1 <= 53.0:
+        next_boundaries = apply_boundary_targets(
+            signal,
+            next_boundaries,
+            calibration,
+            {1: 0.60, 2: 0.64, 3: 0.72},
+        )
+        adjustments.append("Guardarrail SEBIA agarosa: correccion Albumina/Alfa 1.")
+        percentages, separator_percentages = read_metrics(next_boundaries)
+        albumina, alfa_1, _, beta_1, _, gamma = percentages
+        sep_1, _, _, sep_4, sep_5 = separator_percentages
+
+    if beta_1 >= 12.0 and gamma <= 3.0 and (sep_4 >= 74.0 or sep_5 >= 80.0):
+        next_boundaries = apply_boundary_targets(
+            signal,
+            next_boundaries,
+            calibration,
+            {4: 0.72, 5: 0.755},
+        )
+        adjustments.append("Guardarrail SEBIA agarosa: correccion puente Beta/Gamma.")
+        percentages, separator_percentages = read_metrics(next_boundaries)
+        albumina, alfa_1, _, beta_1, _, gamma = percentages
+        sep_1, _, _, sep_4, sep_5 = separator_percentages
+
+    if gamma <= 3.0 and sep_5 >= 84.0:
+        next_boundaries = apply_boundary_targets(
+            signal,
+            next_boundaries,
+            calibration,
+            {5: 0.795},
+        )
+        adjustments.append("Guardarrail SEBIA agarosa: correccion Beta 2/Gamma.")
+
+    return normalize_boundary_indices(next_boundaries, signal.size), adjustments
+
+
+def apply_equipment_guardrails(
+    signal: np.ndarray,
+    boundaries: list[int],
+    calibration: ProcessorCalibration,
+    equipment_profile: EquipmentProfileResolution,
+) -> tuple[list[int], list[str]]:
+    if equipment_profile.key == SEBIA_AGAROSE_IMAGE_PROFILE_KEY:
+        return apply_sebia_agarose_guardrails(signal, boundaries, calibration)
+    return normalize_boundary_indices(boundaries, signal.size), []
+
+
 def build_warnings(
     *,
     crop: CropPayload,
@@ -395,12 +656,25 @@ def build_warnings(
     detected_peaks: np.ndarray,
     signal: np.ndarray,
     boundaries: list[int],
+    axis: str,
+    equipment_profile: EquipmentProfileResolution,
+    equipment_adjustments: list[str],
 ) -> list[str]:
     warnings: list[str] = []
-    warnings.append("Motor v3.6 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+    warnings.append("Motor v3.7 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+
+    if equipment_profile.key == SEBIA_AGAROSE_IMAGE_PROFILE_KEY:
+        warnings.append(f"Perfil de equipo activo: {equipment_profile.label}.")
+    if equipment_profile.key == SEBIA_CAPILLARY_IMAGE_PROFILE_KEY:
+        warnings.append("Equipo SEBIA capilar: el procesamiento por imagen es preliminar; ideal usar curva exportada por el equipo.")
+    if equipment_adjustments:
+        warnings.append(" ".join(equipment_adjustments))
 
     if crop.width < calibration.crop_warning_min_width or crop.height < calibration.crop_warning_min_height:
         warnings.append("El recorte es pequeno y puede degradar la estimacion.")
+    expected_axis = "x" if crop.width >= crop.height else "y"
+    if axis != expected_axis:
+        warnings.append(f"El motor selecciono automaticamente el eje {axis.upper()} por calidad de perfil.")
     if detected_peaks.size < calibration.expected_peak_warning_threshold:
         warnings.append("Se detectaron pocos picos; revisar imagen y parametros.")
 
@@ -420,21 +694,25 @@ def process_electrophoresis_image(
     crop_width: int | None = None,
     crop_height: int | None = None,
     total_concentration: float | None = None,
+    equipment_origin: str | None = None,
+    equipment_model: str | None = None,
     calibration: ProcessorCalibration | None = None,
 ) -> ProcessAnalysisResponse:
     active_calibration = calibration or get_calibration()
+    equipment_profile = resolve_equipment_profile(equipment_origin, equipment_model)
     image = decode_image(contents)
     height, width = image.shape[:2]
     crop = build_crop_rect(crop_left, crop_top, crop_width, crop_height, width, height)
 
     gray = prepare_grayscale(image, active_calibration)
     cropped = gray[crop.top : crop.top + crop.height, crop.left : crop.left + crop.width]
-    axis = "x" if crop.width >= crop.height else "y"
-    raw_signal = robust_projection(cropped, axis, active_calibration)
-    signal = normalize_signal(raw_signal, active_calibration)
-
-    detected_peaks = detect_peaks(signal, active_calibration)
-    boundaries = build_boundaries(signal, active_calibration)
+    axis, signal, detected_peaks, boundaries = select_projection_axis(cropped, active_calibration)
+    boundaries, equipment_adjustments = apply_equipment_guardrails(
+        signal,
+        boundaries,
+        active_calibration,
+        equipment_profile,
+    )
     fractions = build_fractions(signal, boundaries, total_concentration)
     peaks = [fractions[key].peak_index for key in FRACTION_KEYS]
     valleys = boundaries[1:-1]
@@ -445,12 +723,18 @@ def process_electrophoresis_image(
         detected_peaks=detected_peaks,
         signal=signal,
         boundaries=boundaries,
+        axis=axis,
+        equipment_profile=equipment_profile,
+        equipment_adjustments=equipment_adjustments,
     )
 
     return ProcessAnalysisResponse(
         algorithm_version=ALGORITHM_VERSION,
         calibration_profile=active_calibration.profile_name,
         calibration_version=active_calibration.profile_version,
+        equipment_profile=equipment_profile.key,
+        equipment_profile_label=equipment_profile.label,
+        equipment_adjustments=equipment_adjustments,
         axis=axis,
         image_size=SizePayload(width=width, height=height),
         crop_used=crop,

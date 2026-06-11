@@ -58,6 +58,8 @@ async def process_analysis(
     crop_width: int | None = Form(default=None),
     crop_height: int | None = Form(default=None),
     total_concentration: float | None = Form(default=None),
+    equipment_origin: str | None = Form(default=None),
+    equipment_model: str | None = Form(default=None),
 ) -> ProcessAnalysisResponse:
     contents = await file.read()
     calibration = get_calibration()
@@ -73,6 +75,8 @@ async def process_analysis(
             crop_width=crop_width,
             crop_height=crop_height,
             total_concentration=total_concentration,
+            equipment_origin=equipment_origin,
+            equipment_model=equipment_model,
             calibration=calibration,
         )
     except ValueError as exc:

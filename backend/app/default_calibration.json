@@ -1,7 +1,7 @@
 {
   "profile_name": "serum_protein_clean_v3",
-  "profile_version": "2026-04-25-calibrated-boundaries-v3.6",
-  "description": "Motor v3.6: baseline adaptativo protegido y separadores anclados en la calibracion real. Busca valles locales cerca del objetivo esperado y evita correcciones heuristicas en cascada que introducian saltos erraticos entre muestras similares. Los resultados automaticos son preliminares y deben validarse con revision manual/PDF.",
+  "profile_version": "2026-06-11-axis-quality-boundary-refine-v3.7",
+  "description": "Motor v3.7: baseline adaptativo protegido, seleccion automatica del eje por calidad de perfil y refinamiento local de separadores con control de error por areas. Reduce sesgos por orientacion/crop y mejora la estabilidad en Beta 2/Gamma. Los resultados automaticos son preliminares y deben validarse con revision manual/PDF.",
   "gaussian_blur_kernel_size": 5,
   "projection_top_fraction": 0.38,
   "smoothing_sigma_divisor": 220.0,

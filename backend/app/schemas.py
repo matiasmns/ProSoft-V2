@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 FractionKey = Literal["albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma"]
@@ -44,6 +44,9 @@ class ProcessAnalysisResponse(BaseModel):
     algorithm_version: str
     calibration_profile: str
     calibration_version: str
+    equipment_profile: str | None = None
+    equipment_profile_label: str | None = None
+    equipment_adjustments: list[str] = Field(default_factory=list)
     axis: Literal["x", "y"]
     image_size: SizePayload
     crop_used: CropPayload

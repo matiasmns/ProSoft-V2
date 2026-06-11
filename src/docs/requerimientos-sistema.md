@@ -44,6 +44,7 @@ El sistema asistirá al profesional del laboratorio. No realizará diagnóstico 
 2. Registra o selecciona paciente y muestra.
 3. Se carga una imagen con la muestra. Esta esta en la seccion CargadeMuestra.tsx. Este componente se encarga de analizar la imagen y de ajustar el cuadro de analisis o area de referencia aplicando valores de izquierda, arriba, ancho y alto. La separacion ya no forma parte del runtime actual; si vuelven casos con multiples muestras escaneadas, habra que definir una estrategia explicita para aislarlas.
 -Ahi se va al componente NuevoAnalisisPage.tsx donde se ven los resultados.
+3.1. Antes de procesar, el operador debe poder indicar equipo y plataforma cuando el metodo lo requiera, por ejemplo `SEBIA gel/agarosa` vs `SEBIA capilar`, porque impacta la calibracion y la confiabilidad del resultado por imagen.
 4. Ingresa proteínas totales séricas.
 5. El sistema ejecuta preprocesamiento y análisis.
 6. El sistema muestra densitograma, áreas y resultados cuantitativos.
@@ -78,6 +79,8 @@ El sistema asistirá al profesional del laboratorio. No realizará diagnóstico 
 - RF-18: El sistema deberá calcular el porcentaje relativo de cada fracción.
 - RF-19: El sistema deberá calcular la concentración absoluta de cada fracción a partir del valor de proteínas totales.
 - RF-20: El sistema deberá conservar la versión del algoritmo y parámetros usados en cada análisis.
+- RF-20.1: El sistema deberá registrar el equipo/plataforma analítica usada y, cuando corresponda, activar perfiles o guardarraíles específicos del método.
+- RF-20.2: Si el equipo es capilar y la entrada es solo imagen, el sistema deberá advertir que el resultado es preliminar y que la curva exportada por el equipo es preferible.
 
 ### 6.5 Visualización y revisión manual
 

@@ -60,10 +60,10 @@ export type DensitogramFileSupport = {
 }
 
 export const emptyCropSettings: CropSettings = {
-  izquierda: '0',
-  arriba: '0',
-  ancho: '35',
-  alto: '100',
+  izquierda: '',
+  arriba: '',
+  ancho: '',
+  alto: '',
 }
 
 function toNullableNumber(value: string) {
