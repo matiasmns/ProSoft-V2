@@ -1,4 +1,4 @@
-export type ProcessorEquipmentProfileKey =
+type ProcessorEquipmentProfileKey =
   | 'generic_image'
   | 'sebia_agarose_image'
   | 'sebia_capillary_image'
@@ -16,7 +16,7 @@ const SEBIA_BRAND_TOKEN = 'SEBIA'
 const SEBIA_AGAROSE_MODEL_TOKENS = ['HYDRASYS', 'HYDRAGEL']
 const SEBIA_CAPILLARY_MODEL_TOKENS = ['CAPILLARYS', 'MINICAP']
 
-export function normalizeEquipmentText(value: string | null | undefined) {
+function normalizeEquipmentText(value: string | null | undefined) {
   if (!value) return ''
   return value.trim().toUpperCase().replace(/\s+/g, ' ')
 }

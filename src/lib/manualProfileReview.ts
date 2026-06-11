@@ -1,12 +1,12 @@
 import type { LocalFractionKey, LocalFractionResult, LocalProcessorResult } from './localProcessor'
 
-export type ReviewSeparatorDefinition = {
+type ReviewSeparatorDefinition = {
   id: string
   label: string
   color: string
 }
 
-export type ReviewSeparatorView = ReviewSeparatorDefinition & {
+type ReviewSeparatorView = ReviewSeparatorDefinition & {
   ratio: number
   index: number
   x: number

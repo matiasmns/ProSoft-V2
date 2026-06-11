@@ -1,7 +1,7 @@
 import type { CropPayload } from './electroforesis'
 import type { LocalProcessorResult } from './localProcessor'
 
-export type BackendProcessorResult = LocalProcessorResult & {
+type BackendProcessorResult = LocalProcessorResult & {
   algorithm_version?: string
   calibration_profile?: string
   calibration_version?: string

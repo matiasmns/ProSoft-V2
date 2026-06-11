@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 
-export const ELECTROFORESIS_BUCKET = 'electroforesis-imagenes'
+const ELECTROFORESIS_BUCKET = 'electroforesis-imagenes'
 const DIRECT_DENSITOGRAM_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.bmp']
 const DIRECT_DENSITOGRAM_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/bmp']
 const BACKEND_ONLY_DENSITOGRAM_EXTENSIONS = ['.tif', '.tiff']
@@ -25,14 +25,14 @@ export type CropPayload = {
   alto: number | null
 }
 
-export type ProcessorImageDraft = {
+type ProcessorImageDraft = {
   nombre: string
   tipo: string
   crop: CropSettings
   storagePath?: string | null
 }
 
-export type ResultadoCrudoLastStep =
+type ResultadoCrudoLastStep =
   | 'sample_selected'
   | 'sample_uploaded'
   | 'sample_upload_failed'
@@ -40,7 +40,7 @@ export type ResultadoCrudoLastStep =
   | 'analysis_processed_local'
   | 'analysis_saved'
 
-export type ResultadoCrudo = {
+type ResultadoCrudo = {
   processor_status: 'pending' | 'manual_review' | 'processed' | 'failed'
   last_step: ResultadoCrudoLastStep
   algorithm_version: string | null
@@ -53,7 +53,7 @@ export type ResultadoCrudo = {
   }>
 }
 
-export type DensitogramFileSupport = {
+type DensitogramFileSupport = {
   accepted: boolean
   requiresBackend: boolean
   reason: string | null

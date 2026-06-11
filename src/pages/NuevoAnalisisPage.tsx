@@ -676,22 +676,6 @@ async function refreshProcessingPreview(image: ImagePreview) {
   return await createSignedAnalisisImageUrl(image.storagePath)
 }
 
-const DENSITOGRAM_X_VISUAL_SCALE = 1
-
-function compactDensitogramRatio(x: number) {
-  return Math.min(Math.max(0.5 + (x - 0.5) * DENSITOGRAM_X_VISUAL_SCALE, 0), 1)
-}
-
-function compactDensitogramX(x: number, index: number, lastIndex: number) {
-  if (index === 0) return 0
-  if (index === lastIndex) return 1
-  return compactDensitogramRatio(x)
-}
-
-function restoreDensitogramX(displayX: number) {
-  return Math.min(Math.max(0.5 + (displayX - 0.5) / DENSITOGRAM_X_VISUAL_SCALE, 0), 1)
-}
-
 function buildDensitogramDisplayY(y: number, index: number, lastIndex: number) {
   if (index === 0) return 0
   if (index === lastIndex) return 0
@@ -721,7 +705,7 @@ function buildDensitogramDisplayProfile(profile: LocalProcessorResult['profile']
   const lastIndex = Math.max(profile.length - 1, 0)
   return profile.map((point, index) => ({
     ...point,
-    x: compactDensitogramX(point.x, index, lastIndex),
+    x: index === 0 ? 0 : index === lastIndex ? 1 : Math.min(Math.max(point.x, 0), 1),
     y: buildDensitogramDisplayY(point.y, index, lastIndex),
   }))
 }
@@ -780,15 +764,9 @@ function buildDensitogramDisplaySegment(profile: LocalProcessorResult['profile']
   ]
 
   return rawPoints.map(point => ({
-    x: point.x <= 0 ? 0 : point.x >= 1 ? 1 : compactDensitogramRatio(point.x),
+    x: point.x <= 0 ? 0 : point.x >= 1 ? 1 : Math.min(Math.max(point.x, 0), 1),
     y: point.x <= 0 || point.x >= 1 ? 0 : buildDensitogramDisplayY(point.y, 1, 2),
   }))
-}
-
-function buildSeparatorDisplayX(separatorRatio: number, separatorIndex: number, separatorCount: number) {
-  if (separatorIndex === 0) return 0
-  if (separatorIndex === separatorCount - 1) return 1
-  return compactDensitogramRatio(separatorRatio)
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
@@ -856,8 +834,7 @@ function ProfileChart({
     if (!rect) return null
 
     const x = ((event.clientX - rect.left) / rect.width) * chartWidth
-    const displayRatio = Math.min(Math.max((x - plotLeft) / plotWidth, 0), 1)
-    return restoreDensitogramX(displayRatio)
+    return Math.min(Math.max((x - plotLeft) / plotWidth, 0), 1)
   }
 
   function startDragging(index: number, event: React.PointerEvent<SVGLineElement | SVGCircleElement>) {
@@ -992,7 +969,7 @@ function ProfileChart({
         <polyline fill="none" stroke="#161616" strokeWidth="1" strokeLinejoin="round" strokeLinecap="round" points={points} />
 
         {review.separators.map((separator, index) => {
-          const displayX = buildSeparatorDisplayX(separator.x, index, review.separators.length)
+          const displayX = index === 0 ? 0 : index === review.separators.length - 1 ? 1 : Math.min(Math.max(separator.x, 0), 1)
           const x = plotLeft + displayX * plotWidth
           const isSelected = index === selectedSeparatorIndex
           const isLocked = index === 0 || index === review.separators.length - 1
@@ -1325,7 +1302,7 @@ function PrintableProfileChart({
         <polyline fill="none" stroke="#292929" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" points={points} />
 
         {review.separators.map((separator, index) => {
-          const displayX = buildSeparatorDisplayX(separator.x, index, review.separators.length)
+          const displayX = index === 0 ? 0 : index === review.separators.length - 1 ? 1 : Math.min(Math.max(separator.x, 0), 1)
           const x = plotLeft + displayX * plotWidth
           const isLocked = index === 0 || index === review.separators.length - 1
           const displayY = isLocked ? 0 : separator.y

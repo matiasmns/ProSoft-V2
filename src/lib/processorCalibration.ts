@@ -45,7 +45,7 @@ export type ProcessorCalibrationProfile = {
   fraction_windows: ProcessorFractionWindow[]
 }
 
-export type ProcessorCalibrationResponse = ProcessorCalibrationProfile & {
+type ProcessorCalibrationResponse = ProcessorCalibrationProfile & {
   algorithm_version: string
 }
 
