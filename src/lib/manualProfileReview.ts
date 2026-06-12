@@ -252,6 +252,59 @@ export function buildDefaultSeparatorRatios(result: LocalProcessorResult) {
   return normalizeSeparatorRatios([0, ...internalRatios, 1], sampleCount)
 }
 
+export function buildDetectedValleySeparatorRatios(result: LocalProcessorResult) {
+  const values = readAnalysisValues(result)
+  const sampleCount = readAnalysisSampleCount(result)
+  const maxIndex = Math.max(0, sampleCount - 1)
+  if (maxIndex === 0) return normalizeSeparatorRatios([], sampleCount)
+
+  const defaultRatios = buildDefaultSeparatorRatios(result)
+  const targetIndices = defaultRatios.slice(1, -1).map(ratio => ratio * maxIndex)
+  const rawValleys = Array.isArray(result.detected_valleys) && result.detected_valleys.length > 0
+    ? result.detected_valleys
+    : result.valleys
+  const detectedValleys = rawValleys
+    .filter((value): value is number => Number.isFinite(value))
+    .map(value => Math.round(clamp(value, 0, maxIndex)))
+    .filter(index => index > 0 && index < maxIndex)
+    .sort((left, right) => left - right)
+
+  if (detectedValleys.length === 0) return defaultRatios
+
+  const minGap = minGapFor(sampleCount)
+  const snapWindow = Math.max(minGap * 2, Math.round(maxIndex * 0.06))
+  const selectedIndices: number[] = []
+
+  for (let index = 0; index < targetIndices.length; index += 1) {
+    const previous = selectedIndices[index - 1] ?? 0
+    const remainingSeparators = targetIndices.length - index - 1
+    const minAllowed = previous + minGap
+    const maxAllowed = maxIndex - ((remainingSeparators + 1) * minGap)
+    const safeTarget = clamp(targetIndices[index], minAllowed, maxAllowed)
+    const candidates = detectedValleys.filter(candidate => (
+      candidate >= minAllowed &&
+      candidate <= maxAllowed &&
+      Math.abs(candidate - safeTarget) <= snapWindow &&
+      !selectedIndices.includes(candidate)
+    ))
+
+    if (candidates.length === 0) {
+      selectedIndices.push(safeTarget)
+      continue
+    }
+
+    const bestCandidate = candidates.reduce((best, candidate) => {
+      const bestDistance = Math.abs(best - safeTarget)
+      const candidateDistance = Math.abs(candidate - safeTarget)
+      if (candidateDistance !== bestDistance) return candidateDistance < bestDistance ? candidate : best
+      return readSignalValue(values, candidate) < readSignalValue(values, best) ? candidate : best
+    })
+    selectedIndices.push(bestCandidate)
+  }
+
+  return normalizeSeparatorRatios([0, ...selectedIndices, maxIndex].map(index => index / maxIndex), sampleCount)
+}
+
 export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targets: ReferenceFractionTargets) {
   const values = readAnalysisValues(result)
   const sampleCount = values.length

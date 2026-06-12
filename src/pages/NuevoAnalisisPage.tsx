@@ -14,6 +14,7 @@ import { resolveProcessingEquipmentProfile } from '../lib/equipmentProfiles'
 import { LOCAL_FALLBACK_ALGORITHM_VERSION, resolveLocalProcessorCalibration } from '../lib/processorCalibration'
 import {
   REVIEW_SEPARATOR_DEFS,
+  buildDetectedValleySeparatorRatios,
   buildDefaultSeparatorRatios,
   buildManualReviewData,
   buildReferenceSeparatorRatios,
@@ -810,6 +811,7 @@ function ProfileChart({
   selectedSeparatorIndex,
   onSelectSeparator,
   onAdjustSeparator,
+  onSnapToDetectedValleys,
   onResetSeparators,
 }: {
   result: LocalProcessorResult
@@ -818,6 +820,7 @@ function ProfileChart({
   selectedSeparatorIndex: number
   onSelectSeparator: (index: number) => void
   onAdjustSeparator: (index: number, nextRatio: number) => void
+  onSnapToDetectedValleys: () => void
   onResetSeparators: () => void
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -853,6 +856,17 @@ function ProfileChart({
   const analysisProfile = buildAnalysisChartProfile(result)
   const displayProfile = buildDensitogramDisplayProfile(analysisProfile)
   const points = displayProfile.map(point => `${(plotLeft + point.x * plotWidth).toFixed(1)},${(plotBottom - point.y * plotHeight).toFixed(1)}`).join(' ')
+  const detectedValleyMarkers = readDetectedValleyIndices(result)
+    .map(index => {
+      const ratio = index / Math.max(analysisSampleCount - 1, 1)
+      const point = interpolateProfilePoint(analysisProfile, ratio)
+      return {
+        index,
+        x: point.x,
+        y: buildDensitogramDisplayY(point.y, index, Math.max(analysisSampleCount - 1, 1)),
+      }
+    })
+    .filter(marker => marker.x > 0 && marker.x < 1)
 
   function toSvgRatio(event: React.PointerEvent<SVGSVGElement | SVGLineElement | SVGCircleElement>) {
     const rect = svgRef.current?.getBoundingClientRect()
@@ -886,6 +900,7 @@ function ProfileChart({
         <span className="text-xs font-semibold" style={{ color: '#5C894A' }}>{chartTitle}</span>
         <div className="flex items-center gap-2 text-[11px]" style={{ color: '#54585E' }}>
           <span>{result.detected_peaks} picos</span>
+          <span>{detectedValleyMarkers.length} minimos reales</span>
           <span>{review.separators.length - 2} separadores</span>
           {minimumIssuesCount > 0 && (
             <span className="rounded-full px-2 py-1 font-semibold" style={{ background: '#FEF2F2', color: '#C0392B' }}>
@@ -992,6 +1007,26 @@ function ProfileChart({
           Intensidad normalizada
         </text>
         <polyline fill="none" stroke="#161616" strokeWidth="1" strokeLinejoin="round" strokeLinecap="round" points={points} />
+
+        {detectedValleyMarkers.map(marker => {
+          const x = plotLeft + marker.x * plotWidth
+          const y = plotBottom - marker.y * plotHeight
+
+          return (
+            <g key={`detected-valley-${marker.index}`}>
+              <line
+                x1={x}
+                x2={x}
+                y1={plotBottom - 10}
+                y2={plotBottom + 6}
+                stroke="#2F80ED"
+                strokeWidth="1"
+                opacity="0.55"
+              />
+              <circle cx={x} cy={y} r="3" fill="#2F80ED" stroke="#FFFFFF" strokeWidth="1" opacity="0.8" />
+            </g>
+          )
+        })}
 
         {review.separators.map((separator, index) => {
           const displayX = index === 0 ? 0 : index === review.separators.length - 1 ? 1 : Math.min(Math.max(separator.x, 0), 1)
@@ -1114,14 +1149,24 @@ function ProfileChart({
                 El eje Y se recalcula sobre la curva cuando moves la linea. Las lineas de Inicio y Fin quedan fijas.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onResetSeparators}
-              className="rounded-lg px-3 py-2 text-[11px] font-medium transition"
-              style={{ background: '#FFFFFF', color: '#54585E', border: '1px solid #DFE0E5' }}
-            >
-              Restablecer
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onSnapToDetectedValleys}
+                className="rounded-lg px-3 py-2 text-[11px] font-medium transition"
+                style={{ background: '#EFF6FF', color: '#2F80ED', border: '1px solid #BFDBFE' }}
+              >
+                Ajustar a minimos
+              </button>
+              <button
+                type="button"
+                onClick={onResetSeparators}
+                className="rounded-lg px-3 py-2 text-[11px] font-medium transition"
+                style={{ background: '#FFFFFF', color: '#54585E', border: '1px solid #DFE0E5' }}
+              >
+                Restablecer
+              </button>
+            </div>
           </div>
 
           <div className="rounded-xl px-3 py-3 mb-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
@@ -1510,6 +1555,13 @@ export default function NuevoAnalisisPage() {
     setReferenceCalibration(null)
   }
 
+  function handleSnapSeparatorsToDetectedValleys() {
+    if (!processorResult) return
+    setSeparatorRatios(buildDetectedValleySeparatorRatios(processorResult))
+    setSelectedSeparatorIndex(1)
+    setReferenceCalibration(null)
+  }
+
   useEffect(() => {
     setVals(current => {
       let changed = false
@@ -1870,6 +1922,7 @@ export default function NuevoAnalisisPage() {
                       selectedSeparatorIndex={selectedSeparatorIndex}
                       onSelectSeparator={setSelectedSeparatorIndex}
                       onAdjustSeparator={handleAdjustSeparator}
+                      onSnapToDetectedValleys={handleSnapSeparatorsToDetectedValleys}
                       onResetSeparators={handleResetSeparators}
                     />
                   )}
