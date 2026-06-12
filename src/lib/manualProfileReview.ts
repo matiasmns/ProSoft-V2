@@ -28,8 +28,6 @@ export type ReferenceFractionTargets = Record<LocalFractionKey, number>
 const FRACTION_KEYS: LocalFractionKey[] = ['albumina', 'alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
 const MIN_SEPARATOR_COUNT = FRACTION_KEYS.length + 1
 const REFERENCE_VALLEY_SNAP_WINDOW_RATIO = 0.04
-const REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP = 1.25
-const REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP = 1.5
 const REVIEW_HIGH_VALLEY_WARNING_LEVEL = 0.34
 const REVIEW_LOW_VALLEY_DEPTH_WARNING = 0.035
 
@@ -95,22 +93,63 @@ function buildSeparatorWarning(isLocked: boolean, y: number, isLocalMinimum: boo
   return null
 }
 
-function trapezoidArea(values: number[], start: number, end: number) {
-  if (end <= start) return 0
+function interpolateSignalValue(values: number[], position: number) {
+  if (values.length === 0) return 0
+  const maxIndex = values.length - 1
+  const safePosition = clamp(position, 0, maxIndex)
+  const leftIndex = Math.floor(safePosition)
+  const rightIndex = Math.min(leftIndex + 1, maxIndex)
+  const fraction = safePosition - leftIndex
+  return values[leftIndex] + ((values[rightIndex] - values[leftIndex]) * fraction)
+}
 
+function trapezoidAreaBetween(values: number[], start: number, end: number) {
+  if (values.length < 2 || end <= start) return 0
+
+  const maxIndex = values.length - 1
+  let cursor = clamp(start, 0, maxIndex)
+  const safeEnd = clamp(end, 0, maxIndex)
   let total = 0
-  for (let index = start; index < end; index += 1) {
-    total += (values[index] + values[index + 1]) / 2
+
+  while (cursor < safeEnd) {
+    const next = Math.min(Math.floor(cursor) + 1, safeEnd)
+    const cursorY = interpolateSignalValue(values, cursor)
+    const nextY = interpolateSignalValue(values, next)
+    total += ((cursorY + nextY) / 2) * (next - cursor)
+    cursor = next
   }
 
   return total
 }
 
+function findPositionForArea(values: number[], targetArea: number, maxIndex: number) {
+  const totalArea = trapezoidAreaBetween(values, 0, maxIndex)
+  if (totalArea <= 0) return 0
+
+  const safeTarget = clamp(targetArea, 0, totalArea)
+  let low = 0
+  let high = maxIndex
+
+  for (let iteration = 0; iteration < 36; iteration += 1) {
+    const middle = (low + high) / 2
+    const area = trapezoidAreaBetween(values, 0, middle)
+    if (area < safeTarget) {
+      low = middle
+    } else {
+      high = middle
+    }
+  }
+
+  return (low + high) / 2
+}
+
 function findPeakIndex(values: number[], start: number, end: number) {
-  let peakIndex = start
+  const safeStart = Math.max(0, Math.ceil(start))
+  const safeEnd = Math.min(values.length - 1, Math.floor(end))
+  let peakIndex = safeStart
   let peakValue = Number.NEGATIVE_INFINITY
 
-  for (let index = start; index <= end; index += 1) {
+  for (let index = safeStart; index <= safeEnd; index += 1) {
     if (values[index] > peakValue) {
       peakValue = values[index]
       peakIndex = index
@@ -169,29 +208,6 @@ function findNearestReferenceValley(values: number[], targetIndex: number, minAl
   return bestIndex
 }
 
-function buildTargetPercentages(targets: ReferenceFractionTargets, totalTarget: number) {
-  return FRACTION_KEYS.map(key => (Math.max(0, targets[key]) / totalTarget) * 100)
-}
-
-function buildAreaPercentages(values: number[], indices: number[]) {
-  const totalArea = trapezoidArea(values, indices[0], indices[indices.length - 1])
-  const safeTotalArea = totalArea > 0 ? totalArea : 1
-
-  return FRACTION_KEYS.map((_, index) => (
-    (trapezoidArea(values, indices[index], indices[index + 1]) / safeTotalArea) * 100
-  ))
-}
-
-function measureTargetError(values: number[], indices: number[], targetPercentages: number[]) {
-  const percentages = buildAreaPercentages(values, indices)
-  const errors = percentages.map((percentage, index) => Math.abs(percentage - targetPercentages[index]))
-
-  return {
-    totalError: errors.reduce((total, error) => total + error, 0),
-    maxError: Math.max(...errors),
-  }
-}
-
 export function normalizeSeparatorRatios(ratios: number[], sampleCount: number) {
   const maxIndex = Math.max(0, sampleCount - 1)
   if (maxIndex === 0) return new Array(MIN_SEPARATOR_COUNT).fill(0)
@@ -201,7 +217,7 @@ export function normalizeSeparatorRatios(ratios: number[], sampleCount: number) 
     index / (MIN_SEPARATOR_COUNT - 1)
   ))
 
-  const indices = source.map(ratio => Math.round(clamp(ratio, 0, 1) * maxIndex))
+  const indices = source.map(ratio => clamp(ratio, 0, 1) * maxIndex)
 
   for (let index = 0; index < indices.length; index += 1) {
     const minAllowed = index === 0 ? 0 : indices[index - 1] + minGap
@@ -245,62 +261,21 @@ export function buildReferenceSeparatorRatios(result: LocalProcessorResult, targ
   const totalTarget = FRACTION_KEYS.reduce((total, key) => (
     total + Math.max(0, Number.isFinite(targets[key]) ? targets[key] : 0)
   ), 0)
-  const totalArea = trapezoidArea(values, 0, maxIndex)
+  const totalArea = trapezoidAreaBetween(values, 0, maxIndex)
 
   if (totalTarget <= 0 || totalArea <= 0) return buildDefaultSeparatorRatios(result)
 
-  const indices = [0]
+  const positions = [0]
   let accumulatedTarget = 0
 
   for (const key of FRACTION_KEYS.slice(0, -1)) {
     accumulatedTarget += Math.max(0, targets[key]) / totalTarget
-    const targetArea = accumulatedTarget * totalArea
-    let runningArea = 0
-    let targetIndex = maxIndex
-
-    for (let index = 0; index < maxIndex; index += 1) {
-      const segmentArea = (values[index] + values[index + 1]) / 2
-      const nextArea = runningArea + segmentArea
-
-      if (nextArea >= targetArea) {
-        const fractionWithinSegment = segmentArea > 0 ? (targetArea - runningArea) / segmentArea : 0
-        targetIndex = clamp(index + Math.round(clamp(fractionWithinSegment, 0, 1)), 0, maxIndex)
-        break
-      }
-
-      runningArea = nextArea
-    }
-
-    indices.push(targetIndex)
+    positions.push(findPositionForArea(values, accumulatedTarget * totalArea, maxIndex))
   }
 
-  indices.push(maxIndex)
+  positions.push(maxIndex)
 
-  const normalizedIndices = ratiosToIndices(indices.map(index => index / maxIndex), sampleCount)
-  const areaOnlyIndices = [...normalizedIndices]
-  const minGap = minGapFor(sampleCount)
-
-  for (let index = 1; index < normalizedIndices.length - 1; index += 1) {
-    normalizedIndices[index] = findNearestReferenceValley(
-      values,
-      normalizedIndices[index],
-      normalizedIndices[index - 1] + minGap,
-      normalizedIndices[index + 1] - minGap,
-    )
-  }
-
-  const targetPercentages = buildTargetPercentages(targets, totalTarget)
-  const areaOnlyError = measureTargetError(values, areaOnlyIndices, targetPercentages)
-  const snappedError = measureTargetError(values, normalizedIndices, targetPercentages)
-
-  if (
-    snappedError.maxError > REFERENCE_MAX_FRACTION_ERROR_AFTER_SNAP ||
-    snappedError.totalError > areaOnlyError.totalError + REFERENCE_MAX_TOTAL_ERROR_INCREASE_AFTER_SNAP
-  ) {
-    return normalizeSeparatorRatios(areaOnlyIndices.map(index => index / maxIndex), sampleCount)
-  }
-
-  return normalizeSeparatorRatios(normalizedIndices.map(index => index / maxIndex), sampleCount)
+  return normalizeSeparatorRatios(positions.map(position => position / maxIndex), sampleCount)
 }
 
 export function snapSeparatorRatio(
@@ -333,9 +308,11 @@ export function buildManualReviewData(
 ): ManualReviewData {
   const values = readAnalysisValues(result)
   const sampleCount = Math.max(1, values.length)
+  const maxIndex = Math.max(0, sampleCount - 1)
   const separatorRatios = normalizeSeparatorRatios(ratios, sampleCount)
   const separatorIndices = ratiosToIndices(separatorRatios, sampleCount)
-  const totalArea = Math.max(trapezoidArea(values, separatorIndices[0], separatorIndices[separatorIndices.length - 1]), 0)
+  const separatorPositions = separatorRatios.map(ratio => ratio * maxIndex)
+  const totalArea = Math.max(trapezoidAreaBetween(values, separatorPositions[0], separatorPositions[separatorPositions.length - 1]), 0)
   const safeTotalArea = totalArea > 0 ? totalArea : 1
 
   const separators = REVIEW_SEPARATOR_DEFS.map((definition, index) => {
@@ -356,18 +333,18 @@ export function buildManualReviewData(
   })
 
   const fractions = FRACTION_KEYS.reduce<Record<LocalFractionKey, LocalFractionResult>>((accumulator, key, index) => {
-    const start = separatorIndices[index]
-    const end = separatorIndices[index + 1]
+    const start = separatorPositions[index]
+    const end = separatorPositions[index + 1]
     const peakIndex = findPeakIndex(values, start, end)
-    const area = trapezoidArea(values, start, end)
+    const area = trapezoidAreaBetween(values, start, end)
     const percentage = roundTo((area / safeTotalArea) * 100, 2)
     const concentration = totalConcentration != null
       ? roundTo((percentage * totalConcentration) / 100, 2)
       : null
 
     accumulator[key] = {
-      start,
-      end,
+      start: roundTo(start, 4),
+      end: roundTo(end, 4),
       peak_index: peakIndex,
       area: roundTo(area, 4),
       percentage,
