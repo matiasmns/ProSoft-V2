@@ -50,7 +50,7 @@ type ProcessorCalibrationResponse = ProcessorCalibrationProfile & {
 }
 
 export const PROCESSOR_FRACTION_KEYS: ProcessorFractionKey[] = ['albumina', 'alfa_1', 'alfa_2', 'beta_1', 'beta_2', 'gamma']
-export const LOCAL_FALLBACK_ALGORITHM_VERSION = 'local-calibrated-v3.8'
+export const LOCAL_FALLBACK_ALGORITHM_VERSION = 'local-calibrated-v3.9'
 
 let calibrationRequest: Promise<ProcessorCalibrationResponse> | null = null
 

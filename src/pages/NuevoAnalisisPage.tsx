@@ -469,6 +469,8 @@ function buildStoredReferenceCalibration(
     axis: result.axis,
     profile_length: profileLength,
     total_area: result.total_area,
+    boundaries: result.boundaries ?? null,
+    detected_valleys: result.detected_valleys ?? null,
     peaks: result.peaks,
     valleys: result.valleys,
     updated_at: new Date().toISOString(),
@@ -717,6 +719,29 @@ function readAnalysisProfileLength(result: LocalProcessorResult) {
 
   if (signal.length > 1) return signal.length
   return Math.max(result.profile_length, result.profile.length, 1)
+}
+
+function readProcessorSeparatorIndices(result: LocalProcessorResult) {
+  const profileLength = readAnalysisProfileLength(result)
+  const maxIndex = Math.max(profileLength - 1, 0)
+  const storedBoundaries = Array.isArray(result.boundaries)
+    ? result.boundaries.filter(isNumber)
+    : []
+
+  if (storedBoundaries.length === REVIEW_SEPARATOR_COUNT) {
+    return storedBoundaries.slice(1, -1)
+  }
+
+  return fracciones.slice(0, -1).map(fraccion => (
+    Math.min(Math.max(result.fractions[fraccion.key].end, 0), maxIndex)
+  ))
+}
+
+function readDetectedValleyIndices(result: LocalProcessorResult) {
+  const detectedValleys = Array.isArray(result.detected_valleys)
+    ? result.detected_valleys.filter(isNumber)
+    : []
+  return detectedValleys.length > 0 ? detectedValleys : result.valleys
 }
 
 function interpolateProfilePoint(profile: LocalProcessorResult['profile'], ratio: number) {
@@ -1682,7 +1707,7 @@ export default function NuevoAnalisisPage() {
             equipmentModel: normalizedEquipmentModel,
           })
           result = backendResult
-          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v3.6-calibrated-boundaries'
+          algorithmVersion = backendResult.algorithm_version ?? 'fastapi-opencv-v3.9-valley-boundary-audit'
           calibrationProfile = backendResult.calibration_profile ?? ''
           calibrationVersion = backendResult.calibration_version ?? ''
           processorSource = 'backend_fastapi'
@@ -2190,9 +2215,10 @@ export default function NuevoAnalisisPage() {
                       </div>
 
                       <div className="rounded-xl p-3" style={{ background: '#FFFFFF', border: '1px solid #DFE0E5' }}>
-                        <p className="font-semibold" style={{ color: '#5C894A' }}>Picos y minimos detectados</p>
+                        <p className="font-semibold" style={{ color: '#5C894A' }}>Picos, separadores y minimos reales</p>
                         <p className="mt-1" style={{ color: '#6B7178' }}>Picos por fraccion: {formatIndexList(processorResult.peaks, readAnalysisProfileLength(processorResult))}</p>
-                        <p className="mt-1" style={{ color: '#6B7178' }}>Minimos: {formatIndexList(processorResult.valleys, readAnalysisProfileLength(processorResult))}</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Separadores motor: {formatIndexList(readProcessorSeparatorIndices(processorResult), readAnalysisProfileLength(processorResult))}</p>
+                        <p className="mt-1" style={{ color: '#6B7178' }}>Minimos reales: {formatIndexList(readDetectedValleyIndices(processorResult), readAnalysisProfileLength(processorResult))}</p>
                         <p className="mt-1" style={{ color: '#6B7178' }}>Picos detectados totales: {processorResult.detected_peaks}</p>
                       </div>
 

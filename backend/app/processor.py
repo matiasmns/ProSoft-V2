@@ -15,7 +15,7 @@ from .equipment_profiles import (
 from .schemas import CropPayload, FractionKey, FractionResult, ProcessAnalysisResponse, ProfilePoint, SizePayload
 
 
-ALGORITHM_VERSION = "fastapi-opencv-v3.8-capillary-guardrails"
+ALGORITHM_VERSION = "fastapi-opencv-v3.9-valley-boundary-audit"
 
 FRACTION_KEYS: tuple[FractionKey, ...] = ("albumina", "alfa_1", "alfa_2", "beta_1", "beta_2", "gamma")
 
@@ -141,6 +141,44 @@ def detect_peaks(signal: np.ndarray, calibration: ProcessorCalibration) -> np.nd
     distance = max(calibration.peak_distance_min, signal.size // calibration.peak_distance_divisor)
     peaks, _ = find_peaks(signal, prominence=calibration.peak_prominence, distance=distance)
     return peaks
+
+
+def is_local_minimum(signal: np.ndarray, index: int) -> bool:
+    if index <= 0 or index >= signal.size - 1:
+        return False
+    return float(signal[index]) <= float(signal[index - 1]) and float(signal[index]) <= float(signal[index + 1])
+
+
+def valley_depth_at(signal: np.ndarray, index: int) -> float:
+    if index <= 0 or index >= signal.size - 1:
+        return 0.0
+    previous = float(signal[index - 1])
+    current = float(signal[index])
+    next_value = float(signal[index + 1])
+    outer_previous = float(signal[index - 2]) if index > 1 else previous
+    outer_next = float(signal[index + 2]) if index < signal.size - 2 else next_value
+    return max(0.0, max(previous, outer_previous) - current) + max(0.0, max(next_value, outer_next) - current)
+
+
+def detect_valleys(signal: np.ndarray, calibration: ProcessorCalibration) -> list[int]:
+    distance = max(3, signal.size // max(calibration.peak_distance_divisor * 2, 1))
+    candidates: list[tuple[float, int]] = []
+
+    for index in range(1, signal.size - 1):
+        if not is_local_minimum(signal, index):
+            continue
+        depth = valley_depth_at(signal, index)
+        if depth < 0.005 and float(signal[index]) > calibration.high_valley_warning_level:
+            continue
+        candidates.append((float(signal[index]) - (min(depth, 1.0) * 0.2), index))
+
+    candidates.sort(key=lambda candidate: candidate[0])
+    selected: list[int] = []
+    for _, index in candidates:
+        if all(abs(index - selected_index) >= distance for selected_index in selected):
+            selected.append(index)
+
+    return sorted(selected)
 
 
 def find_peak_index(signal: np.ndarray, start: int, end: int) -> int:
@@ -376,7 +414,9 @@ def boundary_objective(signal: np.ndarray, boundaries: list[int], target_percent
     valley_values = np.asarray([float(signal[index]) for index in internal_boundaries], dtype=np.float64)
     mean_valley = float(valley_values.mean())
     max_valley = float(valley_values.max())
-    return total_error + max_error + (mean_valley * 5.0) + (max_valley * 2.0)
+    non_minimum_penalty = sum(1 for index in internal_boundaries if not is_local_minimum(signal, index)) * 2.0
+    weak_valley_penalty = sum(max(0.0, 0.03 - valley_depth_at(signal, index)) for index in internal_boundaries) * 12.0
+    return total_error + max_error + (mean_valley * 5.0) + (max_valley * 2.0) + non_minimum_penalty + weak_valley_penalty
 
 
 def refine_boundaries(
@@ -720,7 +760,7 @@ def build_warnings(
     equipment_adjustments: list[str],
 ) -> list[str]:
     warnings: list[str] = []
-    warnings.append("Motor v3.8 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
+    warnings.append("Motor v3.9 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.")
 
     if equipment_profile.key == SEBIA_AGAROSE_IMAGE_PROFILE_KEY:
         warnings.append(f"Perfil de equipo activo: {equipment_profile.label}.")
@@ -738,6 +778,10 @@ def build_warnings(
         warnings.append("Se detectaron pocos picos; revisar imagen y parametros.")
 
     internal_boundaries = boundaries[1:-1]
+    non_minimum_boundaries = [boundary for boundary in internal_boundaries if not is_local_minimum(signal, boundary)]
+    if non_minimum_boundaries:
+        warnings.append("Uno o mas separadores automaticos no coinciden con un minimo local real; revisar posiciones manualmente.")
+
     high_valleys = [boundary for boundary in internal_boundaries if float(signal[boundary]) >= calibration.high_valley_warning_level]
     if high_valleys:
         warnings.append("Uno o mas separadores caen en valles poco definidos; revisar posiciones manualmente.")
@@ -774,7 +818,7 @@ def process_electrophoresis_image(
     )
     fractions = build_fractions(signal, boundaries, total_concentration)
     peaks = [fractions[key].peak_index for key in FRACTION_KEYS]
-    valleys = boundaries[1:-1]
+    detected_valleys = detect_valleys(signal, active_calibration)
     total_area = trapz_area(signal, boundaries[0], boundaries[-1])
     warnings = build_warnings(
         crop=crop,
@@ -800,7 +844,9 @@ def process_electrophoresis_image(
         profile_length=int(signal.size),
         detected_peaks=int(detected_peaks.size),
         peaks=peaks,
-        valleys=valleys,
+        boundaries=boundaries,
+        detected_valleys=detected_valleys,
+        valleys=detected_valleys,
         total_area=round(total_area, 4),
         profile_signal=[round(float(value), 6) for value in signal],
         profile=downsample(signal, active_calibration.profile_downsample_points),

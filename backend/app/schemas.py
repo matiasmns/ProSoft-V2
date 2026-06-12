@@ -53,6 +53,8 @@ class ProcessAnalysisResponse(BaseModel):
     profile_length: int
     detected_peaks: int
     peaks: list[int]
+    boundaries: list[int] = Field(default_factory=list)
+    detected_valleys: list[int] = Field(default_factory=list)
     valleys: list[int]
     total_area: float
     profile_signal: list[float]

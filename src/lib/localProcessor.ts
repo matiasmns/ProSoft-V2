@@ -32,6 +32,8 @@ export type LocalProcessorResult = {
   profile_length: number
   detected_peaks: number
   peaks: number[]
+  boundaries?: number[]
+  detected_valleys?: number[]
   valleys: number[]
   total_area: number
   profile_signal: number[]
@@ -392,6 +394,47 @@ function detectLocalMaxima(values: number[], calibration: ProcessorCalibrationPr
   return selected.sort((left, right) => left - right)
 }
 
+function isLocalMinimum(values: number[], index: number) {
+  if (index <= 0 || index >= values.length - 1) return false
+  return values[index] <= values[index - 1] && values[index] <= values[index + 1]
+}
+
+function valleyDepthAt(values: number[], index: number) {
+  if (index <= 0 || index >= values.length - 1) return 0
+  const previous = values[index - 1]
+  const current = values[index]
+  const next = values[index + 1]
+  const outerPrevious = values[index - 2] ?? previous
+  const outerNext = values[index + 2] ?? next
+  return Math.max(0, Math.max(previous, outerPrevious) - current) + Math.max(0, Math.max(next, outerNext) - current)
+}
+
+function detectLocalMinima(values: number[], calibration: ProcessorCalibrationProfile) {
+  const minDistance = Math.max(3, Math.floor(values.length / Math.max(calibration.peak_distance_divisor * 2, 1)))
+  const candidates: Array<{ index: number; score: number }> = []
+
+  for (let index = 1; index < values.length - 1; index += 1) {
+    if (!isLocalMinimum(values, index)) continue
+    const depth = valleyDepthAt(values, index)
+    if (depth < 0.005 && values[index] > calibration.high_valley_warning_level) continue
+    candidates.push({
+      index,
+      score: values[index] - (Math.min(depth, 1) * 0.2),
+    })
+  }
+
+  candidates.sort((left, right) => left.score - right.score)
+
+  const selected: number[] = []
+  for (const candidate of candidates) {
+    if (selected.every(index => Math.abs(index - candidate.index) >= minDistance)) {
+      selected.push(candidate.index)
+    }
+  }
+
+  return selected.sort((left, right) => left - right)
+}
+
 function minGapFor(sampleCount: number) {
   const baseGap = sampleCount >= 180 ? 4 : sampleCount >= 90 ? 3 : 2
   const maxIndex = Math.max(0, sampleCount - 1)
@@ -655,7 +698,8 @@ function boundaryObjective(
   targetPercentages: number[],
 ) {
   const { totalError, maxError } = measureTargetError(values, boundaries, targetPercentages)
-  const valleyValues = boundaries.slice(1, -1).map(index => values[index])
+  const internalBoundaries = boundaries.slice(1, -1)
+  const valleyValues = internalBoundaries.map(index => values[index])
 
   if (valleyValues.length === 0) {
     return totalError + maxError
@@ -663,7 +707,9 @@ function boundaryObjective(
 
   const meanValley = valleyValues.reduce((total, value) => total + value, 0) / valleyValues.length
   const maxValley = Math.max(...valleyValues)
-  return totalError + maxError + (meanValley * 5) + (maxValley * 2)
+  const nonMinimumPenalty = internalBoundaries.filter(index => !isLocalMinimum(values, index)).length * 2
+  const weakValleyPenalty = internalBoundaries.reduce((total, index) => total + Math.max(0, 0.03 - valleyDepthAt(values, index)), 0) * 12
+  return totalError + maxError + (meanValley * 5) + (maxValley * 2) + nonMinimumPenalty + weakValleyPenalty
 }
 
 function refineBoundaries(
@@ -1048,7 +1094,8 @@ export async function processElectrophoresisImage(input: {
     calibration,
     equipmentProfile,
   )
-  const valleys = boundaries.slice(1, -1)
+  const separatorValleys = boundaries.slice(1, -1)
+  const detectedValleys = detectLocalMinima(normalizedProfile, calibration)
   const totalArea = trapezoidArea(normalizedProfile, boundaries[0], boundaries[boundaries.length - 1])
 
   if (totalArea <= 0) {
@@ -1083,7 +1130,7 @@ export async function processElectrophoresisImage(input: {
     gamma: { start: 0, end: 0, peak_index: 0, area: 0, percentage: 0, concentration: null },
   })
 
-  const warningParts = ['Motor local v3.8 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
+  const warningParts = ['Motor local v3.9 calibrado: resultado automatico preliminar; validar con revision manual o PDF antes de informar.']
   if (equipmentProfile.usesSebiaAgaroseGuardrails) {
     warningParts.push(`Perfil de equipo activo: ${equipmentProfile.label}.`)
   }
@@ -1102,7 +1149,11 @@ export async function processElectrophoresisImage(input: {
   if (detectedPeaks.length < calibration.expected_peak_warning_threshold) {
     warningParts.push('Se detectaron pocos picos; revisar imagen y parametros.')
   }
-  if (valleys.some(index => normalizedProfile[index] >= calibration.high_valley_warning_level)) {
+  const nonMinimumSeparators = separatorValleys.filter(index => !isLocalMinimum(normalizedProfile, index))
+  if (nonMinimumSeparators.length > 0) {
+    warningParts.push('Uno o mas separadores automaticos no coinciden con un minimo local real; revisar posiciones manualmente.')
+  }
+  if (separatorValleys.some(index => normalizedProfile[index] >= calibration.high_valley_warning_level)) {
     warningParts.push('Uno o mas separadores caen en valles poco definidos; revisar posiciones manualmente.')
   }
 
@@ -1116,7 +1167,9 @@ export async function processElectrophoresisImage(input: {
     profile_length: normalizedProfile.length,
     detected_peaks: detectedPeaks.length,
     peaks: FRACTION_KEYS.map(key => fractions[key].peak_index),
-    valleys,
+    boundaries,
+    detected_valleys: detectedValleys,
+    valleys: detectedValleys,
     total_area: roundTo(totalArea, 4),
     profile_signal: normalizedProfile.map(value => roundTo(value, 6)),
     profile: downsampleProfile(normalizedProfile, calibration.profile_downsample_points),

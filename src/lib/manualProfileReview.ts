@@ -229,7 +229,10 @@ export function ratiosToIndices(ratios: number[], sampleCount: number) {
 export function buildDefaultSeparatorRatios(result: LocalProcessorResult) {
   const sampleCount = readAnalysisSampleCount(result)
   const originalMax = Math.max(1, sampleCount - 1)
-  const internalRatios = result.valleys.map(valley => clamp(valley / originalMax, 0, 1))
+  const storedBoundaries = Array.isArray(result.boundaries) && result.boundaries.length === MIN_SEPARATOR_COUNT
+    ? result.boundaries
+    : [0, ...result.valleys, originalMax]
+  const internalRatios = storedBoundaries.slice(1, -1).map(boundary => clamp(boundary / originalMax, 0, 1))
   return normalizeSeparatorRatios([0, ...internalRatios, 1], sampleCount)
 }
 
